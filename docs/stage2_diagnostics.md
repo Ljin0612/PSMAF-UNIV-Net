@@ -14,14 +14,23 @@ saved and compared between environments.
 ```bash
 python tools/inspect_univ_model.py > model_inventory.json
 python tools/check_univ_checkpoint.py /path/to/checkpoint.pth > checkpoint_report.json
-python tools/check_univ_checkpoint.py /path/to/checkpoint.pth --summary-only
+python -m tools.check_univ_checkpoint --checkpoint /path/to/checkpoint.pth \
+  --checkpoint-key student --device cpu --json-out checkpoint_report.json
+python tools/check_univ_checkpoint.py /path/to/checkpoint.pth --build-model
 python tools/inspect_univ_features.py \
   --checkpoint /path/to/checkpoint.pth \
   --image-size 224 224 > feature_report.json
 ```
 
-The summary-only checkpoint check avoids constructing the original timm model
-(PyTorch is still required to deserialize its checkpoint). Use `--modules NAME
+Checkpoint inspection does not construct the original timm model unless
+`--build-model` is supplied (PyTorch is still required to deserialize its
+checkpoint). The model check uses the checked-in
+`convmae_convvit_base_patch16` constructor, loads with `strict=False`, safely
+resizes a compatible positional grid, and reports skipped shape mismatches. If
+that constructor or one of its imports is unavailable, the report has
+`model_load.status = "unavailable"` and names the missing import or constructor;
+the required next step is to restore `UNIV-main/models/backbone/mcmae/models_convmae.py`
+or install the dependency named in that error before rerunning the command. Use `--modules NAME
 [NAME ...]` to override hook locations and `--device cuda` only after the CPU smoke
 test passes. Unknown module names are errors rather than silently missing results.
 
