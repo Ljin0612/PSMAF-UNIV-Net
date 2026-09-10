@@ -16,6 +16,35 @@ to the teacher's RGB representation geometry. This is the UNIV cross-modal unifi
 representation mechanism in the supplied source; it is not a YOLO plug-in and there
 is no YOLO integration in this repository.
 
+### Audit method and source boundary
+
+The findings were produced by tracing the checked-in Python, YAML, shell launchers,
+and Markdown documentation. No conclusions depend on the downloadable MVIP data or
+external checkpoint linked from the README, because neither artifact is committed.
+Consequently, tensor shapes below are derived from the configured 224-pixel
+pretraining and 512-pixel segmentation resolutions, while checkpoint mismatch lists
+are structural expectations rather than output captured from the published binary.
+
+For repeatability, these are the most useful code symbols at each step of the trace:
+
+| Trace step | Symbol or configuration field |
+|---|---|
+| Paired sample discovery | `RGB_pair_IR_dataset.__init__` |
+| Synchronized pair transforms | `CoDataAugmentation`, `CoTransCompose` |
+| Student/teacher construction | `pretrain_mcmae.train` |
+| Per-batch modality flow | `pretrain_mcmae.train_one_epoch` |
+| Encoder/token/attention return | `MaskedAutoencoderConvViT.forward_encoder` and `.forward` |
+| Attention pseudo-labels and PCCL | `attention_simi_guided_loss.threshold_attention_map` and `.__call__` |
+| Pretraining serialization | the `save_dict` in `pretrain_mcmae.train` |
+| Segmentation feature extraction | `ConvMAE.forward_features` |
+| UNIV checkpoint branch selection | `mmcv_custom.checkpoint.load_checkpoint` |
+| Absolute position interpolation | the `pos_embed` branch in `mmcv_custom.checkpoint.load_checkpoint` |
+
+The repository-wide inventory was also checked for detector configs, bounding-box
+pipelines, and the strings `Mask R-CNN` and `Faster R-CNN`; none are present. This is
+why the detection discussion below reports an absent implementation rather than
+inferring a detector from ConvMAE's upstream ecosystem.
+
 ## 1. Source tree and responsibilities
 
 ```text
