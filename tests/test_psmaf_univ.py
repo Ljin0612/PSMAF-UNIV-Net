@@ -9,6 +9,7 @@ from psmaf_univ.checkpoint_loader import (
     resize_pos_embed_if_needed,
 )
 from psmaf_univ.multiscale_task_adapter import MultiscaleTaskAdapter
+from psmaf_univ.univ_diagnostics import capture_module_outputs, inspect_features, model_inventory
 
 
 class Encoder(nn.Module):
@@ -76,3 +77,38 @@ def test_feature_dict_and_opt_in_square_inference():
     adapter = MultiscaleTaskAdapter([3], 5)
     assert adapter({"tensor": torch.randn(1, 6, 3), "grid_size": (3, 2)})[0].shape == (1, 5, 3, 2)
     assert adapter(torch.randn(1, 4, 3), allow_square_infer=True)[0].shape == (1, 5, 2, 2)
+
+
+class DiagnosticEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.stage = nn.Conv2d(3, 4, 1)
+
+    def forward(self, image, mask_ratio=0, return_last_attention=False):
+        feature = self.stage(image)
+        latent = feature.flatten(2).transpose(1, 2)
+        attention = torch.ones(image.shape[0], 2, latent.shape[1], latent.shape[1])
+        return latent, attention if return_last_attention else None
+
+
+def test_runtime_diagnostics_capture_features_and_attention():
+    report = inspect_features(DiagnosticEncoder(), image_size=(2, 3), module_names=("stage",))
+    assert report["activations"]["stage"]["shape"] == [1, 4, 2, 3]
+    assert report["output"]["latent"]["shape"] == [1, 6, 4]
+    assert report["output"]["attention"]["shape"] == [1, 2, 6, 6]
+    assert report["attention_available"] is True
+
+
+def test_diagnostic_hooks_reject_unknown_module_and_are_removed():
+    model = DiagnosticEncoder()
+    with pytest.raises(ValueError, match="unknown probe modules"):
+        with capture_module_outputs(model, ("missing",)):
+            pass
+    assert model.stage._forward_hooks == {}
+
+
+def test_model_inventory_reports_capabilities():
+    report = model_inventory(DiagnosticEncoder())
+    assert report["parameter_count"] == 16
+    assert report["trainable_parameter_count"] == 16
+    assert report["has_attention_api"] is False
