@@ -148,12 +148,33 @@ UNIV, and inference with versus without any training-only guidance machinery.
 
 ## 6. Evaluation contract
 
+Results must identify one of the following settings rather than using the ambiguous
+phrase “intended cross-modal setting”:
+
+1. **Single-modality evaluation.** The model receives RGB-only or IR-only input.
+   This setting evaluates single-stream UNIV representation transfer, with metrics
+   reported separately by modality.
+2. **Cross-modality transfer evaluation.** Train or adapt on one modality and
+   evaluate on the other, where the selected dataset and implementation support that
+   protocol. This setting measures modality generalization and feature-space
+   alignment; results must state both the training and evaluation modality and must
+   not be pooled with same-modality results.
+3. **Paired RGB-IR task adaptation evaluation.** The model receives paired RGB and
+   IR images through the explicit path `RGB/IR inputs -> UNIV-based encoder or
+   wrappers -> Multi-scale Task Adapter -> PSMAF Fusion -> downstream head`. This
+   setting evaluates the new PSMAF-UNIV paired fusion model. Metrics are computed per
+   paired sample and aggregated once over the task dataset, rather than averaging
+   independently evaluated RGB and IR predictions. The original UNIV downstream
+   source appears to be single-stream, so this paired two-stream fusion is a
+   PSMAF-UNIV extension and not an existing original UNIV capability.
+
 ### Detection
 
 Use the Faster R-CNN/Mask R-CNN family first and report standard box AP metrics; if
 Mask R-CNN annotations are available, report mask AP separately. Evaluate RGB and
-infrared inputs separately as well as the intended cross-modal setting so that a
-single dominant modality cannot hide weak unified adaptation.
+infrared inputs separately. Where supported, report cross-modality transfer and
+paired RGB-IR task adaptation as distinct protocols using the definitions above, so
+that a single dominant modality cannot hide weak unified adaptation.
 
 ### Semantic segmentation
 

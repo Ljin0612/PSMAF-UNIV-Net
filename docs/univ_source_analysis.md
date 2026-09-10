@@ -40,10 +40,12 @@ For repeatability, these are the most useful code symbols at each step of the tr
 | UNIV checkpoint branch selection | `mmcv_custom.checkpoint.load_checkpoint` |
 | Absolute position interpolation | the `pos_embed` branch in `mmcv_custom.checkpoint.load_checkpoint` |
 
-The repository-wide inventory was also checked for detector configs, bounding-box
-pipelines, and the strings `Mask R-CNN` and `Faster R-CNN`; none are present. This is
-why the detection discussion below reports an absent implementation rather than
-inferring a detector from ConvMAE's upstream ecosystem.
+After excluding generated analysis documents and focusing on implementation and
+configuration files, the repository-wide inventory found no ready-to-run Mask R-CNN
+or Faster R-CNN detection pipeline in the uploaded UNIV source snapshot. This is a
+claim about the absence of detector implementations and configurations, not the
+literal absence of those terms in documentation. The detection discussion below
+therefore does not infer a detector from ConvMAE's upstream ecosystem.
 
 ## 1. Source tree and responsibilities
 
@@ -111,7 +113,7 @@ configuration and launcher target the nine-class MSRS dataset.
 | Attention pseudo labels, \(M^A\) | The head-mean teacher attention followed by cumulative-mass thresholding in `threshold_attention_map`. |
 | Cross-modal similarity, \(M^{IA}\) | Batched cosine similarity between normalized student IR tokens and teacher visible anchors, divided by temperature. |
 | Visible similarity, \(M^{VA}\) | In the configured attention-guided RGB branch, the same computation using student RGB tokens and teacher anchors. The alternative `RGB_patch_simi_loss` instead compares teacher-teacher and student-student RGB Gram matrices. |
-| PCCL | The symmetric binary-cross-entropy alignment between a student/anchor similarity matrix and \(M^A\), implemented by `attention_simi_guided_loss`. |
+| PCCL | Binary-cross-entropy alignment between a student/anchor similarity matrix and \(M^A\), implemented by `attention_simi_guided_loss`; its default transpose term duplicates the same mean-reduced elementwise objective. |
 
 The variable name `teacher` denotes the fixed visible reference and `student` denotes
 the adaptable unified encoder. This is not an EMA teacher: no momentum update or
@@ -178,10 +180,14 @@ For the configured RGB branch they are:
 M^VA = normalize(E_train(RGB)) @ normalize(E_frozen(RGB))^T / temperature
 ```
 
-The code applies `BCEWithLogitsLoss` against \(M^A\) in both orientations, comparing
-the logits and labels once as-is and once transposed, then averages the two losses.
-The transpose makes patch correspondence supervision symmetric with respect to the
-two token axes. Total training loss is
+When `ir_info=None`, the code applies `BCEWithLogitsLoss` once to the logits and
+labels as-is and once to both tensors transposed, then averages the two results.
+Under the default mean reduction these calls contain exactly the same elementwise
+terms and are mathematically identical. The transpose computation therefore does
+not add a real symmetric patch-correspondence constraint and should not be
+interpreted as a separate bidirectional alignment objective. If PSMAF-UNIV later
+needs true symmetric RGB↔IR alignment, it should explicitly define separate
+directional similarity maps or losses. Total training loss is
 `ir_alpha * L_IR + rgb_beta * L_RGB` (both coefficients are 1 by default).
 
 An optional `ir_info` map can reduce selected pseudo-label rows by 0.7 before clamping
@@ -241,8 +247,8 @@ channel mean/std. This preserves patch correspondence across modalities.
        └── student(concat(RGB, IR), mask=0)
               └── [2B,196,768] ──batch split──> V_student, I_student
 
-M^IA = sim(I_student, A) / T ──symmetric BCE with M^A──> L_IR
-M^VA = sim(V_student, A) / T ──symmetric BCE with M^A──> L_RGB
+M^IA = sim(I_student, A) / T ──BCE with M^A──> L_IR
+M^VA = sim(V_student, A) / T ──BCE with M^A──> L_RGB
                                               total = α L_IR + β L_RGB
 ```
 
@@ -310,11 +316,16 @@ spatial, while pretraining returns only the final 196-token representation.
 ### 4.2 Tasks present and absent
 
 The repository supplies semantic segmentation only: UPerNet decode head plus FCN
-auxiliary head on MSRS. `msrs.py` is IR-normalized; `msrs_rgb.py` supplies the RGB
-normalization variant. No paired two-stream downstream loader is present—the active
-pipeline loads one `img` per sample. There is no detection entry point, bounding-box
-dataset, Mask R-CNN, YOLO head, or SegFormer head. Those should be treated as future
-validation adapters rather than inferred parts of original UNIV.
+auxiliary head on MSRS. In the checked-in snapshot, `msrs.py` and `msrs_rgb.py`
+appear to use the same data root, image directories, pipelines, and repeated-channel
+normalization; the snapshot therefore provides no clear RGB-versus-IR normalization
+difference between these configs. A downstream RGB/IR segmentation experiment must
+verify the image directories, modality source, and normalization explicitly, and
+must not assume that selecting `msrs_rgb.py` changes modality preprocessing. No
+paired two-stream downstream loader is present—the active pipeline loads one `img`
+per sample. There is no detection entry point, bounding-box dataset, Mask R-CNN,
+YOLO head, or SegFormer head. Those should be treated as future validation adapters
+rather than inferred parts of original UNIV.
 
 ## 5. Checkpoint formats and loading behavior
 
@@ -456,8 +467,9 @@ representation and adaptation internals.
   to a frozen RGB ConvMAE teacher—not as a downstream detector plug-in.
 * Frozen-teacher patch tokens are the effective semantic anchors; head-averaged,
   thresholded teacher self-attention is the pseudo-label relation matrix.
-* PCCL is a symmetric BCE alignment of temperature-scaled patch/anchor cosine
-  similarities for IR and, by default, RGB.
+* PCCL applies BCE alignment to temperature-scaled patch/anchor cosine similarities
+  for IR and, by default, RGB; its transposed mean-reduced term is equivalent to the
+  untransposed term rather than a separate symmetric objective.
 * Both modalities are always used per iteration; there is no random modality choice.
 * The only supplied validation task is nine-class MSRS semantic segmentation via
   UPerNet/FCN, consuming four NCHW feature maps.
@@ -466,3 +478,13 @@ representation and adaptation internals.
   deliberately filtered.
 * PSMAF-UNIV should extend the shared encoder's multi-stage representation and its
   pseudo-semantic supervision, then expose head-neutral multi-scale task features.
+
+## 8. Known limitations of Stage 1 analysis
+
+* This report is a source-snapshot analysis.
+* Some claims are based on the checked-in implementation and configuration files,
+  not the full original experimental environment.
+* A detection-head implementation may be absent from this snapshot even though the
+  original UNIV paper reports Mask R-CNN downstream results.
+* Paired RGB-IR downstream fusion is a planned PSMAF-UNIV extension, not a capability
+  demonstrated by the original downstream source in this snapshot.
