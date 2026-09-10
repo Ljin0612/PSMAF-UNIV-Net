@@ -2,8 +2,14 @@
 """Report the branch and tensor count in a UNIV checkpoint."""
 import argparse
 from pathlib import Path
+import sys
 
 import torch
+
+# Direct script execution puts tools/, rather than the repository root, first.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from psmaf_univ.checkpoint_loader import extract_state_dict
 
