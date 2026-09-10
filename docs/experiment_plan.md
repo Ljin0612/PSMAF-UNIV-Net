@@ -1,14 +1,59 @@
 # Experiment plan
 
-1. Verify original UNIV checkpoint loading and reproduce its segmentation baseline.
-2. Freeze the encoder and train task adapters to establish an interface baseline.
-3. Compare full fine-tuning, LoRA, multiscale adaptation, semantic guidance, and
-   adaptive fusion under matched schedules and seeds.
-4. Evaluate Mask R-CNN and Faster R-CNN on M3FD, then UPerNet on the selected
-   segmentation benchmark.
-5. Report accuracy, parameter count, throughput, memory, per-class results, and
-   mean/standard deviation across seeds. Store machine-readable outputs outside Git
-   and aggregate them with `tools/collect_results.py` once its schema is finalized.
+## Stages
+
+### Stage 1: Completed
+
+* Source analysis.
+* Research goal documentation.
+* Skeleton modules.
+* Checkpoint-loading hardening.
+* Rectangular-grid handling.
+
+### Stage 2: Current next step
+
+* Diagnose a real checkpoint.
+* Inspect model construction.
+* Run a feature-extraction smoke test.
+* Do **not** begin detection training yet.
+
+### Stage 3: UNIV-to-multiscale adapter validation
+
+* Pass real UNIV output through `MultiScaleTaskAdapter`.
+* Verify P3, P4, and P5 shapes for 512 and 640 inputs, plus rectangular inputs
+  when the underlying model supports them.
+* Do not set an mAP target yet; this stage validates the adapter interface and
+  feature shapes only.
+
+### Stage 4: Original UNIV direct downstream baseline
+
+* Build a single-stream UNIV baseline with a Mask R-CNN- or Faster R-CNN-style
+  detection head.
+* Start with M3FD-IR.
+* Compare random initialization, student and teacher checkpoints, a frozen
+  backbone, partial fine-tuning, and LoRA when available.
+
+### Stage 5: PSMAF-UNIV full detection model
+
+Build and evaluate the complete paired detection path:
+
+`paired RGB-IR input -> UNIV-based encoder/wrapper -> Multi-scale Task Adapter ->`
+`Pseudo-Semantic Guidance -> PSMAF Fusion -> Mask/Faster R-CNN-style detection head`
+
+### Stage 6: Segmentation validation
+
+* Validate with a UPerNet- or SegFormer-style head.
+* Evaluate on MSRS, MFNet, and FMB.
+
+### Stage 7: YOLO extension
+
+* Treat YOLO as a real-time auxiliary branch only.
+* Do not use it as the core proof of the proposed approach.
+
+Across applicable stages, report accuracy, parameter count, throughput, memory,
+per-class results, and mean/standard deviation across seeds. Store machine-readable
+outputs outside Git and aggregate them with `tools/collect_results.py` once its
+schema is finalized.
 
 ## Evaluation settings
 
@@ -35,7 +80,7 @@ separate from the other settings:
 
 * **Input:** paired RGB and IR images.
 * **Model path:** `RGB/IR inputs -> UNIV-based encoder or wrappers -> Multi-scale
-  Task Adapter -> PSMAF Fusion -> downstream head`.
+  Task Adapter -> Pseudo-Semantic Guidance -> PSMAF Fusion -> downstream head`.
 * **Purpose:** evaluate the new PSMAF-UNIV paired fusion model.
 * **Aggregation:** produce one downstream prediction per registered pair and compute
   the task metric once over the paired evaluation set; do not treat the modalities
