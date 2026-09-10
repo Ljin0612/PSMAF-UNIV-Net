@@ -15,6 +15,7 @@ from psmaf_univ.checkpoint_loader import (
     resize_pos_embed_if_needed,
 )
 from psmaf_univ.multiscale_task_adapter import MultiscaleTaskAdapter
+from psmaf_univ.univ_encoder_wrapper import UNIVEncoderWrapper
 from psmaf_univ.univ_diagnostics import capture_module_outputs, inspect_features, model_inventory
 
 
@@ -27,6 +28,47 @@ def test_model_emits_multiscale_features():
     model = PSMAFUNIVModel(Encoder(), [3, 3, 3], out_channels=8)
     output = model(torch.randn(2, 3, 32, 32))
     assert [item.shape for item in output] == [(2, 8, 32, 32), (2, 8, 16, 16), (2, 8, 8, 8)]
+
+
+class TokenEncoder(nn.Module):
+    def __init__(self, token_count, spatial_shape=None):
+        super().__init__()
+        self.token_count = token_count
+        self.spatial_shape = spatial_shape
+
+    def forward(self, image):
+        result = {"tokens": torch.randn(image.shape[0], self.token_count, 3)}
+        if self.spatial_shape is not None:
+            result["spatial_shape"] = self.spatial_shape
+        return result
+
+
+def test_wrapper_retains_structured_token_metadata_and_supports_legacy_mode():
+    wrapper = UNIVEncoderWrapper(TokenEncoder(512, (16, 32)), return_dict=True)
+    structured = wrapper(torch.randn(2, 3, 8, 8), modality="ir")[0]
+    assert structured["tokens"].shape == (2, 512, 3)
+    assert structured["spatial_shape"] == (16, 32)
+    assert structured["modality"] == "ir"
+    assert structured["source"] == "univ_encoder"
+    assert structured["debug"] == {}
+    assert wrapper(torch.randn(2, 3, 8, 8), return_dict=False)[0].shape == (2, 512, 3)
+
+
+def test_model_forwards_rectangular_token_metadata():
+    model = PSMAFUNIVModel(TokenEncoder(512, (16, 32)), [3], out_channels=8)
+    assert model(torch.randn(2, 3, 8, 8))[0].shape == (2, 8, 16, 32)
+
+
+def test_model_explains_how_to_supply_missing_token_shape():
+    model = PSMAFUNIVModel(TokenEncoder(6), [3], out_channels=8)
+    with pytest.raises(ValueError, match="pass rgb_spatial_shape"):
+        model(torch.randn(2, 3, 8, 8))
+    assert model(torch.randn(2, 3, 8, 8), rgb_spatial_shape=(2, 3))[0].shape == (2, 8, 2, 3)
+
+
+def test_model_square_token_inference_is_explicit_opt_in():
+    model = PSMAFUNIVModel(TokenEncoder(16), [3], out_channels=8, allow_square_infer=True)
+    assert model(torch.randn(2, 3, 8, 8))[0].shape == (2, 8, 4, 4)
 
 
 def test_checkpoint_branch_priority():
