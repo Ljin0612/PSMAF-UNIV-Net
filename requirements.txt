@@ -1,0 +1,8 @@
+# Core PSMAF-UNIV development dependencies. Original pinned environment: UNIV-main/requirements.txt
+numpy>=1.23
+torch>=2.0
+torchvision>=0.15
+timm>=0.9
+PyYAML>=6.0
+peft>=0.10
+pytest>=7.0
