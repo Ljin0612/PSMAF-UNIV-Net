@@ -8,11 +8,15 @@ Multi-scale Task Adapter.
 
 ## Reproducible workflow
 
-All commands are run from the repository root and emit JSON so results can be
-saved and compared between environments.
+All commands are run from the repository root. The model inspector prints a
+human-readable report and can additionally save its complete structured report
+with `--json-out`:
 
 ```bash
-python tools/inspect_univ_model.py > model_inventory.json
+python tools/inspect_univ_model.py
+python tools/inspect_univ_model.py --json-out model_inventory.json
+python tools/inspect_univ_model.py --source-root /path/to/UNIV-main \
+  --json-out model_inventory.json
 python tools/check_univ_checkpoint.py /path/to/checkpoint.pth > checkpoint_report.json
 python -m tools.check_univ_checkpoint --checkpoint /path/to/checkpoint.pth \
   --checkpoint-key student --device cpu --json-out checkpoint_report.json
@@ -21,6 +25,16 @@ python tools/inspect_univ_features.py \
   --checkpoint /path/to/checkpoint.pth \
   --image-size 224 224 > feature_report.json
 ```
+
+The inspector first parses Python source (without importing it) to list likely
+ConvMAE, MCMAE, and UNIV classes/factories and their import paths. It then uses
+the exact factory selected by `pretrain_mcmae.py`, rather than substituting a
+mock encoder. On success it reports total/trainable/frozen parameters, a module
+tree, patch and positional embeddings, block and norm names, discovered
+attention modules, and candidate feature taps. If construction fails, the
+console and optional JSON report retain the exception and explicitly name a
+missing dependency when Python provides one; install that dependency or restore
+the source and rerun. Fake models are reserved for unit tests.
 
 Checkpoint inspection does not construct the original timm model unless
 `--build-model` is supplied (PyTorch is still required to deserialize its

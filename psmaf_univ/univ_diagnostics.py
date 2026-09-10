@@ -56,12 +56,68 @@ def build_original_univ(source_root: str | Path | None = None) -> nn.Module:
 def model_inventory(model: nn.Module) -> dict[str, Any]:
     """Return architecture and parameter facts suitable for JSON output."""
     parameters = list(model.parameters())
+    named_modules = dict(model.named_modules())
+    named_parameters = dict(model.named_parameters())
+    patch_embeddings = [
+        name for name in named_modules if name and ("patch_embed" in name.lower() or "patchembed" in type(named_modules[name]).__name__.lower())
+    ]
+    positional_embeddings = [name for name in named_parameters if "pos_embed" in name.lower()]
+    block_groups = {
+        name: len(module)
+        for name, module in named_modules.items()
+        if name
+        and "block" in name.lower()
+        and "decoder" not in name.lower()
+        and isinstance(module, (nn.ModuleList, nn.Sequential))
+    }
+    norms = [
+        name for name, module in named_modules.items()
+        if name and ("norm" in name.lower() or isinstance(module, nn.LayerNorm))
+    ]
+    attentions = [
+        name for name, module in named_modules.items()
+        if name and ("attn" in name.lower() or "attention" in type(module).__name__.lower())
+    ]
+    module_tree = []
+    for name, module in named_modules.items():
+        if not name:
+            continue
+        depth = name.count(".") + 1
+        # Numbered grandchildren of repeated block containers would make the
+        # console inventory unnecessarily enormous; attention leaves are
+        # reported separately below.
+        if depth <= 2:
+            module_tree.append({"name": name, "type": type(module).__name__, "depth": depth})
+
+    probe_modules = [name for name in DEFAULT_PROBE_MODULES if name in named_modules]
+    candidates = [
+        {"module": name, "reason": reason}
+        for name, reason in (
+            ("blocks1.1", "last stride-4 convolutional encoder block"),
+            ("blocks2.1", "last stride-8 convolutional encoder block"),
+            ("patch_embed4", "stride-16 token projection before positional encoding"),
+            ("blocks3.10", "last stride-16 transformer encoder block"),
+            ("norm", "normalized stride-16 semantic tokens returned by UNIV"),
+        )
+        if name in named_modules
+    ]
     return {
         "class": f"{type(model).__module__}.{type(model).__qualname__}",
         "parameter_count": sum(parameter.numel() for parameter in parameters),
         "trainable_parameter_count": sum(parameter.numel() for parameter in parameters if parameter.requires_grad),
+        "frozen_parameter_count": sum(parameter.numel() for parameter in parameters if not parameter.requires_grad),
         "module_count": sum(1 for _ in model.modules()),
-        "probe_modules": [name for name in DEFAULT_PROBE_MODULES if name in dict(model.named_modules())],
+        "module_tree": module_tree,
+        "patch_embedding_names": patch_embeddings,
+        "patch_embedding_name": patch_embeddings[0] if patch_embeddings else None,
+        "pos_embed_names": positional_embeddings,
+        "pos_embed_name": positional_embeddings[0] if positional_embeddings else None,
+        "encoder_block_groups": block_groups,
+        "encoder_block_count": sum(block_groups.values()),
+        "norm_layer_names": norms,
+        "attention_module_names": attentions,
+        "candidate_feature_extraction_points": candidates,
+        "probe_modules": probe_modules,
         "has_attention_api": hasattr(model, "get_last_selfattention"),
         "has_encoder_api": hasattr(model, "forward_encoder"),
         "pos_embed_shape": list(model.pos_embed.shape) if hasattr(model, "pos_embed") else None,
