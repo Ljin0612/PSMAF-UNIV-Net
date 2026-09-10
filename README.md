@@ -16,6 +16,7 @@ is the task-adaptation path built on top of, and jointly with, that representati
 * [Stage 2: PSMAF-UNIV research goal and experimental contract](docs/research_goal.md)
 * [Stage 3: source-layout decision](docs/source_layout.md)
 * [Stage 3: modular PSMAF-UNIV design](docs/psmaf_univ_design.md)
+* [Stage 2: runtime checkpoint and feature diagnostics](docs/stage2_diagnostics.md)
 
 The primary detector will follow the Mask R-CNN/Faster R-CNN family to keep the
 first comparison close to UNIV. YOLOv8 is reserved for a later real-time extension,
@@ -29,3 +30,7 @@ decision before running it. New, importable components live in `psmaf_univ/`, wh
 `detection/`, `segmentation/`, and `pretraining/` separate task integrations. The
 command entry points introduced in Stage 3 define interfaces only; they do not yet
 launch full experiments.
+
+Stage 2 provides executable JSON diagnostics for the original factory, checkpoint
+compatibility, intermediate features, final semantic tokens, and self-attention.
+Run that workflow before implementing downstream detection training.
