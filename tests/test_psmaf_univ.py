@@ -1,6 +1,7 @@
 import pytest
-import torch
-from torch import nn
+
+torch = pytest.importorskip("torch")
+nn = torch.nn
 
 from psmaf_univ import PSMAFUNIVModel
 from psmaf_univ.checkpoint_loader import (
