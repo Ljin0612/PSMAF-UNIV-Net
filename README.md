@@ -14,7 +14,18 @@ is the task-adaptation path built on top of, and jointly with, that representati
 
 * [Stage 1: original UNIV source analysis](docs/univ_source_analysis.md)
 * [Stage 2: PSMAF-UNIV research goal and experimental contract](docs/research_goal.md)
+* [Stage 3: source-layout decision](docs/source_layout.md)
+* [Stage 3: modular PSMAF-UNIV design](docs/psmaf_univ_design.md)
 
 The primary detector will follow the Mask R-CNN/Faster R-CNN family to keep the
 first comparison close to UNIV. YOLOv8 is reserved for a later real-time extension,
 not the primary formulation or baseline.
+
+
+## Repository layout
+
+The untouched upstream snapshot remains in `UNIV-main/`; see the source-layout
+decision before running it. New, importable components live in `psmaf_univ/`, while
+`detection/`, `segmentation/`, and `pretraining/` separate task integrations. The
+command entry points introduced in Stage 3 define interfaces only; they do not yet
+launch full experiments.

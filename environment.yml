@@ -1,0 +1,15 @@
+name: psmaf-univ
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pytorch>=2.0
+  - torchvision>=0.15
+  - numpy>=1.23
+  - pyyaml>=6.0
+  - pip
+  - pip:
+      - timm>=0.9
+      - peft>=0.10
+      - pytest>=7.0
