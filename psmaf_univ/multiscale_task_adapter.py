@@ -49,7 +49,9 @@ class MultiscaleTaskAdapter(nn.Module):
         for item, supplied_shape, projection in zip(feature_list, shape_list, self.projections):
             feature = item
             if isinstance(item, dict):
-                feature = item.get("tensor", item.get("feature"))
+                feature = item.get(
+                    "tensor", item.get("feature", item.get("features", item.get("tokens")))
+                )
                 dict_shape = item.get("spatial_shape", item.get("grid_size"))
                 if supplied_shape is not None and dict_shape is not None:
                     raise ValueError("spatial shape was provided both separately and in the feature dict")
