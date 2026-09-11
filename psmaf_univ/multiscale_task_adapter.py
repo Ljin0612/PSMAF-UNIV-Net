@@ -1,15 +1,34 @@
 """Projection of heterogeneous backbone levels into task-ready feature maps."""
 
 from collections.abc import Sequence
+from typing import cast
 
 from torch import Tensor, nn
+
+
+def _normalize_shape_alias(
+    shape: tuple[int, int] | Sequence[tuple[int, int] | None] | None,
+    num_levels: int,
+) -> list[tuple[int, int] | None]:
+    """Normalize a shape alias to one optional shape per adapter level."""
+    if shape is None:
+        return [None] * num_levels
+    if num_levels == 1 and len(shape) == 2 and all(isinstance(value, int) for value in shape):
+        return [cast(tuple[int, int], tuple(shape))]
+
+    shapes = list(shape)  # type: ignore[arg-type]
+    if len(shapes) != num_levels:
+        raise ValueError("spatial shape count does not match adapter levels")
+    return [None if value is None else tuple(value) for value in shapes]
 
 
 class MultiscaleTaskAdapter(nn.Module):
     """Project BCHW maps or BNC tokens to a shared channel width.
 
-    BNC inputs require an explicit ``spatial_shape=(height, width)`` (or the
-    ``grid_size`` alias) to preserve rectangular grids. A feature may instead be
+    BNC inputs require an explicit ``spatial_shape`` (or its ``grid_size`` alias)
+    to preserve rectangular grids. For a single level, both ``(height, width)``
+    and ``[(height, width)]`` are accepted. Aliases are normalized to per-level
+    shapes before conflicts are checked. A feature may instead be
     ``{"tensor": tokens, "spatial_shape": (height, width)}``. Legacy square
     inference is available only when ``allow_square_infer=True``.
     """
@@ -28,25 +47,15 @@ class MultiscaleTaskAdapter(nn.Module):
         allow_square_infer: bool | None = None,
     ) -> tuple[Tensor, ...]:
         """Project features, validating every explicit BNC token-grid shape."""
-        if (
-            spatial_shape is not None
-            and grid_size is not None
-            and tuple(spatial_shape) != tuple(grid_size)
-        ):
-            raise ValueError("spatial_shape and grid_size must match when both are provided")
-        shapes = spatial_shape if spatial_shape is not None else grid_size
         feature_list = [features] if isinstance(features, (Tensor, dict)) else list(features)
         if len(feature_list) != len(self.projections):
             raise ValueError("feature count does not match configured adapter levels")
 
-        if shapes is None:
-            shape_list = [None] * len(feature_list)
-        elif len(feature_list) == 1 and len(shapes) == 2 and all(isinstance(value, int) for value in shapes):
-            shape_list = [tuple(shapes)]
-        else:
-            shape_list = list(shapes)  # type: ignore[arg-type]
-            if len(shape_list) != len(feature_list):
-                raise ValueError("spatial shape count does not match adapter levels")
+        spatial_shapes = _normalize_shape_alias(spatial_shape, len(feature_list))
+        grid_shapes = _normalize_shape_alias(grid_size, len(feature_list))
+        if spatial_shape is not None and grid_size is not None and spatial_shapes != grid_shapes:
+            raise ValueError("spatial_shape and grid_size must match when both are provided")
+        shape_list = spatial_shapes if spatial_shape is not None else grid_shapes
 
         infer_square = self.allow_square_infer if allow_square_infer is None else allow_square_infer
         maps = []
@@ -58,14 +67,14 @@ class MultiscaleTaskAdapter(nn.Module):
                 )
                 item_spatial_shape = item.get("spatial_shape")
                 item_grid_size = item.get("grid_size")
-                if (
-                    item_spatial_shape is not None
-                    and item_grid_size is not None
-                    and tuple(item_spatial_shape) != tuple(item_grid_size)
+                item_spatial_shapes = _normalize_shape_alias(item_spatial_shape, 1)
+                item_grid_sizes = _normalize_shape_alias(item_grid_size, 1)
+                if item_spatial_shape is not None and item_grid_size is not None and (
+                    item_spatial_shapes != item_grid_sizes
                 ):
                     raise ValueError("spatial_shape and grid_size must match when both are provided")
                 dict_shape = (
-                    item_spatial_shape if item_spatial_shape is not None else item_grid_size
+                    item_spatial_shapes[0] if item_spatial_shape is not None else item_grid_sizes[0]
                 )
                 if supplied_shape is not None and dict_shape is not None:
                     raise ValueError("spatial shape was provided both separately and in the feature dict")
