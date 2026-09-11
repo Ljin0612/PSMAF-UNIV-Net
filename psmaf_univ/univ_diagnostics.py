@@ -18,6 +18,7 @@ import torch
 from torch import Tensor, nn
 
 from .checkpoint_loader import CheckpointLoadReport, load_univ_checkpoint
+from .compat import apply_numpy_legacy_aliases
 
 
 DEFAULT_PROBE_MODULES = (
@@ -49,6 +50,9 @@ def build_original_univ(source_root: str | Path | None = None) -> nn.Module:
         raise FileNotFoundError(f"UNIV model source not found under {root}")
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
+    # The original UNIV snapshot uses aliases removed in NumPy 1.24. Apply the
+    # focused compatibility shim immediately before importing that source.
+    apply_numpy_legacy_aliases()
     module = importlib.import_module("models.backbone.mcmae.models_convmae")
     return module.convmae_convvit_base_patch16()
 
