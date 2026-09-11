@@ -89,6 +89,11 @@ def _finite_report(state: Mapping[str, torch.Tensor]) -> dict[str, Any]:
     }
 
 
+def _parameter_count(state: Mapping[str, torch.Tensor] | None) -> int:
+    """Count scalar values represented by a tensor state-dict branch."""
+    return sum(tensor.numel() for tensor in state.values()) if state is not None else 0
+
+
 def _important(keys: list[str]) -> list[str]:
     markers = ("patch_embed", "pos_embed", "blocks", "attn", "mlp", "norm")
     return [key for key in keys if any(marker in key for marker in markers)]
@@ -112,7 +117,9 @@ def _load_against_model(
         }
 
     candidate = {key.removeprefix("module."): value for key, value in state.items()}
+    candidate_key_count = len(candidate)
     model_state = model.state_dict()
+    model_state_key_count = len(model_state)
     pos_info = resize_pos_embed_if_needed(candidate, model_state)
     resized = ["pos_embed"] if pos_info["resized"] else []
     skipped: list[str] = []
@@ -125,9 +132,19 @@ def _load_against_model(
     incompatible = model.load_state_dict(candidate, strict=False)
     missing = list(incompatible.missing_keys)
     unexpected = list(incompatible.unexpected_keys)
+    loaded_keys = [key for key in candidate if key in model_state]
+    parameter_keys = set(dict(model.named_parameters()))
+    loaded_parameter_count = sum(
+        model_state[key].numel() for key in loaded_keys if key in parameter_keys
+    )
     return {
         "status": "loaded",
-        "loaded_key_count": sum(key in model_state for key in candidate),
+        "model_state_key_count": model_state_key_count,
+        "candidate_key_count": candidate_key_count,
+        "loaded_key_count": len(loaded_keys),
+        "load_fraction": len(loaded_keys) / model_state_key_count if model_state_key_count else 0.0,
+        "model_parameter_count": sum(parameter.numel() for parameter in model.parameters()),
+        "loaded_parameter_count": loaded_parameter_count,
         "missing_keys_count": len(missing),
         "unexpected_keys_count": len(unexpected),
         "resized_keys": resized,
@@ -164,8 +181,11 @@ def inspect_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         "student_exists": student is not None,
         "teacher_exists": teacher is not None,
         "student_tensor_count": len(student or {}),
+        "student_parameter_count": _parameter_count(student),
         "teacher_tensor_count": len(teacher or {}),
+        "teacher_parameter_count": _parameter_count(teacher),
         "selected_tensor_count": len(state),
+        "selected_parameter_count": _parameter_count(state),
         "lora_key_count": len(lora_keys),
         "sample_lora_keys": lora_keys[:n],
         "pos_embed_shape": _shape_for_suffix(state, "pos_embed"),
