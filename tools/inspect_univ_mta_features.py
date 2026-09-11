@@ -8,6 +8,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import sys
+from typing import Any, Mapping
 import warnings
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,53 @@ import torch
 from psmaf_univ.checkpoint_loader import load_univ_checkpoint
 from psmaf_univ.multiscale_task_adapter import MultiScaleTaskAdapter
 from psmaf_univ.univ_diagnostics import build_original_univ, tensor_summary
+
+
+def validate_checkpoint_load_report(
+    report: Any, checkpoint_key: str | None, min_load_fraction: float
+) -> dict[str, Any]:
+    """Reject checkpoint reports that cannot meaningfully initialize UNIV."""
+    if not 0.0 <= min_load_fraction <= 1.0:
+        raise ValueError("min_load_fraction must be between 0 and 1")
+
+    def value(name: str, default: Any = None) -> Any:
+        if isinstance(report, Mapping):
+            return report.get(name, default)
+        return getattr(report, name, default)
+
+    load_fraction = float(value("load_fraction", 0.0))
+    loaded_key_count = int(value("loaded_key_count", 0))
+    loaded_parameter_count = value("loaded_parameter_count")
+    reasons = []
+    if loaded_key_count == 0:
+        reasons.append("loaded_key_count is zero")
+    if load_fraction <= 0:
+        reasons.append("load_fraction is zero")
+    if loaded_parameter_count is not None and int(loaded_parameter_count) == 0:
+        reasons.append("loaded_parameter_count is zero")
+    if load_fraction < min_load_fraction:
+        reasons.append(
+            f"load_fraction {load_fraction:.6g} is below the required minimum "
+            f"{min_load_fraction:.6g}"
+        )
+    if reasons:
+        branch = checkpoint_key if checkpoint_key is not None else "<root>"
+        raise RuntimeError(
+            f"Checkpoint load failed: no usable weights were loaded from branch {branch!r} "
+            f"({'; '.join(reasons)}). Refusing to run MTA smoke test with randomly "
+            "initialized UNIV weights."
+        )
+
+    validation = {
+        "passed": True,
+        "min_load_fraction": min_load_fraction,
+        "load_fraction": load_fraction,
+        "loaded_key_count": loaded_key_count,
+        "model_state_key_count": int(value("model_state_key_count", 0)),
+    }
+    if loaded_parameter_count is not None:
+        validation["loaded_parameter_count"] = int(loaded_parameter_count)
+    return validation
 
 
 def inspect_univ_mta_features(
@@ -88,6 +136,7 @@ def main() -> None:
     parser.add_argument("--source-root", type=Path, default=ROOT / "UNIV-main")
     parser.add_argument("--checkpoint", type=Path, default=Path("checkpoint0400.pth"))
     parser.add_argument("--checkpoint-key", choices=("student", "teacher"), default="student")
+    parser.add_argument("--min-load-fraction", type=float, default=0.5)
     parser.add_argument("--image-size", type=int, nargs=2, metavar=("HEIGHT", "WIDTH"), default=(224, 224))
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--adapter-out-channels", type=int, default=256)
@@ -102,6 +151,9 @@ def main() -> None:
         checkpoint = load_univ_checkpoint(
             model, args.checkpoint, checkpoint_key=args.checkpoint_key
         )
+    checkpoint_validation = validate_checkpoint_load_report(
+        checkpoint, args.checkpoint_key, args.min_load_fraction
+    )
     caught.extend(str(record.message) for record in records)
     report, runtime_warnings = inspect_univ_mta_features(
         model,
@@ -114,6 +166,7 @@ def main() -> None:
         checkpoint_key=checkpoint.checkpoint_key,
         checkpoint_load_fraction=checkpoint.load_fraction,
         checkpoint_load_report=asdict(checkpoint),
+        checkpoint_validation=checkpoint_validation,
         warnings=caught + runtime_warnings,
     )
     rendered = json.dumps(report, indent=2)

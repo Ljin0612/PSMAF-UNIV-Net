@@ -1,10 +1,52 @@
 """Shape-contract tests for the Stage 2 UNIV-to-MTA boundary."""
 
+from types import SimpleNamespace
+
 import pytest
 
 torch = pytest.importorskip("torch")
 
 from psmaf_univ.multiscale_task_adapter import MultiScaleTaskAdapter
+from tools.inspect_univ_mta_features import validate_checkpoint_load_report
+
+
+def checkpoint_report(load_fraction, loaded_key_count, loaded_parameter_count=1):
+    return SimpleNamespace(
+        load_fraction=load_fraction,
+        loaded_key_count=loaded_key_count,
+        loaded_parameter_count=loaded_parameter_count,
+        model_state_key_count=313,
+    )
+
+
+def test_checkpoint_validation_accepts_fully_loaded_checkpoint():
+    validation = validate_checkpoint_load_report(
+        checkpoint_report(1.0, 313, 1_000), "student", 0.5
+    )
+
+    assert validation == {
+        "passed": True,
+        "min_load_fraction": 0.5,
+        "load_fraction": 1.0,
+        "loaded_key_count": 313,
+        "model_state_key_count": 313,
+        "loaded_parameter_count": 1_000,
+    }
+
+
+def test_checkpoint_validation_rejects_empty_load():
+    with pytest.raises(RuntimeError, match="no usable weights.*randomly initialized"):
+        validate_checkpoint_load_report(checkpoint_report(0.0, 0, 0), "student", 0.5)
+
+
+def test_checkpoint_validation_rejects_load_below_threshold():
+    with pytest.raises(RuntimeError, match="below the required minimum"):
+        validate_checkpoint_load_report(checkpoint_report(0.49, 10), "teacher", 0.5)
+
+
+def test_zero_checkpoint_threshold_still_rejects_empty_load():
+    with pytest.raises(RuntimeError, match="no usable weights"):
+        validate_checkpoint_load_report(checkpoint_report(0.0, 0, 0), "student", 0.0)
 
 
 def test_univ_features_produce_finite_p3_p4_p5():
