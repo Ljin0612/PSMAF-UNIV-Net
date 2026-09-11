@@ -17,7 +17,47 @@ extraction before downstream detection or segmentation.
 
 Run the diagnostics from the repository root. Replace the example checkpoint
 path with a path available in the local environment, and create the report
-directory before running the commands:
+directory before running the commands.
+
+### NumPy compatibility pre-check
+
+The original UNIV source is known to require NumPy 1.23.x compatibility: it
+uses deprecated aliases such as `np.float`, which NumPy 1.24 removed. The
+recommended reproducible Stage 2 environment therefore pins
+`numpy==1.23.5`. With NumPy 1.24 or newer, feature and model inspection may
+fail during model construction before producing JSON unless the diagnostic
+compatibility handling is enabled.
+
+Verify the active NumPy environment before constructing the model:
+
+```bash
+python - <<'PY'
+import numpy as np
+print("numpy:", np.__version__)
+print("has np.float:", hasattr(np, "float"))
+PY
+```
+
+If necessary, install the recommended version with pip:
+
+```bash
+pip install "numpy==1.23.5"
+```
+
+or with conda:
+
+```bash
+conda install -y numpy=1.23.5
+```
+
+The diagnostic tools also apply a narrow compatibility shim for the known
+legacy NumPy aliases before importing the original UNIV model. The pin remains
+the recommended way to reproduce the original environment; the shim does not
+hide unrelated import or model-construction errors.
+
+### Run the diagnostics
+
+Create the output directory after confirming NumPy compatibility:
 
 ```bash
 mkdir -p outputs/diagnostics
