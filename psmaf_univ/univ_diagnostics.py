@@ -216,7 +216,4 @@ def inspect_features(
 def inspect_checkpoint_against_model(model: nn.Module, checkpoint: str | Path) -> dict[str, Any]:
     """Load a checkpoint and expose all compatibility details as JSON data."""
     report: CheckpointLoadReport = load_univ_checkpoint(model, checkpoint)
-    result = asdict(report)
-    result["load_fraction"] = report.loaded_key_count / max(1, len(model.state_dict()))
-    result["model_state_key_count"] = len(model.state_dict())
-    return result
+    return asdict(report)

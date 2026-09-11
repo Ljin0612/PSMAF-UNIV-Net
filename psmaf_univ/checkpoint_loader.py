@@ -40,7 +40,12 @@ class CheckpointLoadReport:
     resized_keys: list[str]
     skipped_shape_mismatch_keys: list[str]
     pos_embed_resize_info: dict[str, Any]
+    model_state_key_count: int
+    candidate_key_count: int
     loaded_key_count: int
+    load_fraction: float
+    model_parameter_count: int
+    loaded_parameter_count: int
     checkpoint_key: str | None
 
     def __iter__(self) -> Iterator[list[str]]:
@@ -144,6 +149,7 @@ def load_univ_checkpoint(
     checkpoint = torch.load(Path(path), map_location="cpu", weights_only=False)
     extracted, checkpoint_key = _extract_state_dict_and_key(checkpoint)
     state = {key.removeprefix("module."): value for key, value in extracted.items()}
+    candidate_key_count = len(state)
     model_state = model.state_dict()
     pos_info = resize_pos_embed_if_needed(state, model_state)
 
@@ -161,13 +167,22 @@ def load_univ_checkpoint(
         warnings.warn(f"skipped checkpoint keys with incompatible shapes: {', '.join(skipped)}", stacklevel=2)
 
     incompatible = model.load_state_dict(state, strict=strict)
-    loaded_count = sum(key in model_state for key in state)
+    loaded_keys = [key for key in state if key in model_state]
+    loaded_count = len(loaded_keys)
+    parameter_keys = set(dict(model.named_parameters()))
     return CheckpointLoadReport(
         missing_keys=list(incompatible.missing_keys),
         unexpected_keys=list(incompatible.unexpected_keys),
         resized_keys=resized_keys,
         skipped_shape_mismatch_keys=skipped,
         pos_embed_resize_info=pos_info,
+        model_state_key_count=len(model_state),
+        candidate_key_count=candidate_key_count,
         loaded_key_count=loaded_count,
+        load_fraction=loaded_count / len(model_state) if model_state else 0.0,
+        model_parameter_count=sum(parameter.numel() for parameter in model.parameters()),
+        loaded_parameter_count=sum(
+            model_state[key].numel() for key in loaded_keys if key in parameter_keys
+        ),
         checkpoint_key=checkpoint_key,
     )

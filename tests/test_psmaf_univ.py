@@ -145,7 +145,12 @@ def test_checkpoint_load_report_records_resize(tmp_path):
     report = load_univ_checkpoint(PositionalModel(), path)
 
     assert report.resized_keys == ["pos_embed"]
+    assert report.model_state_key_count == 1
+    assert report.candidate_key_count == 1
     assert report.loaded_key_count == 1
+    assert report.load_fraction == 1.0
+    assert report.model_parameter_count == 64
+    assert report.loaded_parameter_count == 64
     assert report.checkpoint_key == "student"
     assert report.missing_keys == []
 
@@ -163,7 +168,12 @@ def test_checkpoint_loader_strips_module_prefix_and_skips_bad_shapes(tmp_path):
 
     assert torch.equal(model.weight, torch.ones_like(model.weight))
     assert report.checkpoint_key == "model"
+    assert report.model_state_key_count == 2
+    assert report.candidate_key_count == 2
     assert report.loaded_key_count == 1
+    assert report.load_fraction == 0.5
+    assert report.model_parameter_count == 8
+    assert report.loaded_parameter_count == 6
     assert report.skipped_shape_mismatch_keys == ["bias"]
     assert report.missing_keys == ["bias"]
 
@@ -267,7 +277,11 @@ def test_checkpoint_diagnostic_tool_accepts_a_fake_checkpoint(tmp_path):
     assert json.loads(report_path.read_text(encoding="utf-8")) == report
     assert report["selected_checkpoint_branch"] == "student"
     assert report["student_tensor_count"] == 3
+    assert report["student_parameter_count"] == 55
     assert report["teacher_tensor_count"] == 1
+    assert report["teacher_parameter_count"] == 1
+    assert report["selected_tensor_count"] == 3
+    assert report["selected_parameter_count"] == 55
     assert report["pos_embed_shape"] == [1, 5, 8]
     assert report["patch_embed_key_exists"] is True
     assert report["attention_qkv_key_exists"] is True
