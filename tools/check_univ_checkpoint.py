@@ -137,14 +137,18 @@ def _load_against_model(
     loaded_parameter_count = sum(
         model_state[key].numel() for key in loaded_keys if key in parameter_keys
     )
+    model_parameter_count = sum(parameter.numel() for parameter in model.parameters())
     return {
         "status": "loaded",
         "model_state_key_count": model_state_key_count,
         "candidate_key_count": candidate_key_count,
         "loaded_key_count": len(loaded_keys),
         "load_fraction": len(loaded_keys) / model_state_key_count if model_state_key_count else 0.0,
-        "model_parameter_count": sum(parameter.numel() for parameter in model.parameters()),
+        "model_parameter_count": model_parameter_count,
         "loaded_parameter_count": loaded_parameter_count,
+        "loaded_parameter_fraction": (
+            loaded_parameter_count / model_parameter_count if model_parameter_count else 0.0
+        ),
         "missing_keys_count": len(missing),
         "unexpected_keys_count": len(unexpected),
         "resized_keys": resized,
