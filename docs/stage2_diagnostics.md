@@ -16,18 +16,36 @@ extraction before downstream detection or segmentation.
 ## 3. Diagnostic commands
 
 Run the diagnostics from the repository root. Replace the example checkpoint
-and image paths with paths available in the local environment.
+path with a path available in the local environment, and create the report
+directory before running the commands:
+
+```bash
+mkdir -p outputs/diagnostics
+```
 
 Inspect the student branch of a real checkpoint:
 
 ```bash
-python tools/check_univ_checkpoint.py /path/to/checkpoint0400.pth --checkpoint-key student --json-out outputs/diagnostics/univ_checkpoint_student.json
+python tools/check_univ_checkpoint.py /path/to/checkpoint0400.pth \
+  --checkpoint-key student \
+  --json-out outputs/diagnostics/univ_checkpoint_student.json
 ```
 
 Inspect the teacher branch of the same checkpoint:
 
 ```bash
-python tools/check_univ_checkpoint.py /path/to/checkpoint0400.pth --checkpoint-key teacher --json-out outputs/diagnostics/univ_checkpoint_teacher.json
+python tools/check_univ_checkpoint.py /path/to/checkpoint0400.pth \
+  --checkpoint-key teacher \
+  --json-out outputs/diagnostics/univ_checkpoint_teacher.json
+```
+
+Test checkpoint loading against a constructed original UNIV model:
+
+```bash
+python tools/check_univ_checkpoint.py /path/to/checkpoint0400.pth \
+  --checkpoint-key student \
+  --build-model \
+  --json-out outputs/diagnostics/univ_checkpoint_student_build.json
 ```
 
 Inspect model construction and its candidate feature extraction points:
@@ -36,18 +54,22 @@ Inspect model construction and its candidate feature extraction points:
 python tools/inspect_univ_model.py --json-out outputs/diagnostics/univ_model.json
 ```
 
-Inspect RGB and infrared features at the intended downstream resolution:
+Probe features at the original UNIV input resolution. The feature inspection
+script prints its JSON report to standard output, so use shell redirection to
+save it:
 
 ```bash
 python tools/inspect_univ_features.py \
   --checkpoint /path/to/checkpoint0400.pth \
-  --checkpoint-key student \
-  --rgb-image /path/to/sample_rgb.jpg \
-  --ir-image /path/to/sample_ir.jpg \
-  --input-size 512 \
+  --image-size 224 224 \
   --device cuda \
-  --json-out outputs/diagnostics/univ_features_512.json
+  > outputs/diagnostics/univ_features_224.json
 ```
+
+The initial feature probe should use `224x224` because the original UNIV
+factory may contain fixed `14x14` masks and 196-token positional embeddings.
+Downstream resolutions such as 512, 640, or 1024 require explicit
+resolution-adaptation support and belong to a later stage.
 
 ## 4. Expected outputs
 
