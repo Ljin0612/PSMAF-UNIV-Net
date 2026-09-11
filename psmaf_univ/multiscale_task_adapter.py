@@ -28,8 +28,12 @@ class MultiscaleTaskAdapter(nn.Module):
         allow_square_infer: bool | None = None,
     ) -> tuple[Tensor, ...]:
         """Project features, validating every explicit BNC token-grid shape."""
-        if spatial_shape is not None and grid_size is not None:
-            raise ValueError("provide only one of spatial_shape or grid_size")
+        if (
+            spatial_shape is not None
+            and grid_size is not None
+            and tuple(spatial_shape) != tuple(grid_size)
+        ):
+            raise ValueError("spatial_shape and grid_size must match when both are provided")
         shapes = spatial_shape if spatial_shape is not None else grid_size
         feature_list = [features] if isinstance(features, (Tensor, dict)) else list(features)
         if len(feature_list) != len(self.projections):
@@ -52,7 +56,17 @@ class MultiscaleTaskAdapter(nn.Module):
                 feature = item.get(
                     "tensor", item.get("feature", item.get("features", item.get("tokens")))
                 )
-                dict_shape = item.get("spatial_shape", item.get("grid_size"))
+                item_spatial_shape = item.get("spatial_shape")
+                item_grid_size = item.get("grid_size")
+                if (
+                    item_spatial_shape is not None
+                    and item_grid_size is not None
+                    and tuple(item_spatial_shape) != tuple(item_grid_size)
+                ):
+                    raise ValueError("spatial_shape and grid_size must match when both are provided")
+                dict_shape = (
+                    item_spatial_shape if item_spatial_shape is not None else item_grid_size
+                )
                 if supplied_shape is not None and dict_shape is not None:
                     raise ValueError("spatial shape was provided both separately and in the feature dict")
                 supplied_shape = dict_shape if dict_shape is not None else supplied_shape

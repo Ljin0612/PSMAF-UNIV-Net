@@ -39,9 +39,18 @@ class UNIVEncoderWrapper(nn.Module):
 
         if not isinstance(result.get("tokens", result.get("features")), Tensor):
             raise TypeError("UNIV encoder feature dictionaries must contain a tensor")
+        encoder_spatial_shape = result.get("spatial_shape")
+        encoder_grid_size = result.get("grid_size")
+        if (
+            encoder_spatial_shape is not None
+            and encoder_grid_size is not None
+            and tuple(encoder_spatial_shape) != tuple(encoder_grid_size)
+        ):
+            raise ValueError("spatial_shape and grid_size must match when both are provided")
         if spatial_shape is not None:
-            if result.get("spatial_shape") is not None and tuple(result["spatial_shape"]) != spatial_shape:
-                raise ValueError("encoder and caller supplied different spatial_shape values")
+            encoder_shape = encoder_spatial_shape or encoder_grid_size
+            if encoder_shape is not None and tuple(encoder_shape) != spatial_shape:
+                raise ValueError("encoder and caller supplied different spatial layout values")
             result["spatial_shape"] = spatial_shape
         result.setdefault("modality", modality)
         result["source"] = "univ_encoder"

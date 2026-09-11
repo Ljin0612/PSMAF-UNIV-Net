@@ -31,15 +31,18 @@ def test_model_emits_multiscale_features():
 
 
 class TokenEncoder(nn.Module):
-    def __init__(self, token_count, spatial_shape=None):
+    def __init__(self, token_count, spatial_shape=None, grid_size=None):
         super().__init__()
         self.token_count = token_count
         self.spatial_shape = spatial_shape
+        self.grid_size = grid_size
 
     def forward(self, image):
         result = {"tokens": torch.randn(image.shape[0], self.token_count, 3)}
         if self.spatial_shape is not None:
             result["spatial_shape"] = self.spatial_shape
+        if self.grid_size is not None:
+            result["grid_size"] = self.grid_size
         return result
 
 
@@ -59,6 +62,25 @@ def test_model_forwards_rectangular_token_metadata():
     assert model(torch.randn(2, 3, 8, 8))[0].shape == (2, 8, 16, 32)
 
 
+def test_model_forwards_grid_size_only_token_metadata():
+    model = PSMAFUNIVModel(TokenEncoder(512, grid_size=(16, 32)), [3], out_channels=8)
+    assert model(torch.randn(2, 3, 8, 8))[0].shape == (2, 8, 16, 32)
+
+
+def test_model_accepts_matching_layout_aliases_and_rejects_conflicts():
+    matching = PSMAFUNIVModel(TokenEncoder(512, (16, 32), (16, 32)), [3], out_channels=8)
+    assert matching(torch.randn(2, 3, 8, 8))[0].shape == (2, 8, 16, 32)
+
+    conflicting = PSMAFUNIVModel(TokenEncoder(512, (16, 32), (32, 16)), [3], out_channels=8)
+    with pytest.raises(ValueError, match="spatial_shape and grid_size must match"):
+        conflicting(torch.randn(2, 3, 8, 8))
+
+
+def test_grid_size_prevents_perfect_square_rectangular_ambiguity():
+    model = PSMAFUNIVModel(TokenEncoder(256, grid_size=(8, 32)), [3], out_channels=8)
+    assert model(torch.randn(1, 3, 8, 8))[0].shape == (1, 8, 8, 32)
+
+
 def test_model_explains_how_to_supply_missing_token_shape():
     model = PSMAFUNIVModel(TokenEncoder(6), [3], out_channels=8)
     with pytest.raises(ValueError, match="pass rgb_spatial_shape"):
@@ -67,6 +89,10 @@ def test_model_explains_how_to_supply_missing_token_shape():
 
 
 def test_model_square_token_inference_is_explicit_opt_in():
+    default_model = PSMAFUNIVModel(TokenEncoder(16), [3], out_channels=8)
+    with pytest.raises(ValueError, match="without layout metadata"):
+        default_model(torch.randn(2, 3, 8, 8))
+
     model = PSMAFUNIVModel(TokenEncoder(16), [3], out_channels=8, allow_square_infer=True)
     assert model(torch.randn(2, 3, 8, 8))[0].shape == (2, 8, 4, 4)
 
@@ -155,6 +181,13 @@ def test_rectangular_bnc_features_require_and_use_spatial_shape():
 def test_feature_dict_and_opt_in_square_inference():
     adapter = MultiscaleTaskAdapter([3], 5)
     assert adapter({"tensor": torch.randn(1, 6, 3), "grid_size": (3, 2)})[0].shape == (1, 5, 3, 2)
+    assert adapter(
+        {"tensor": torch.randn(1, 6, 3), "spatial_shape": (3, 2), "grid_size": (3, 2)}
+    )[0].shape == (1, 5, 3, 2)
+    with pytest.raises(ValueError, match="spatial_shape and grid_size must match"):
+        adapter(
+            {"tensor": torch.randn(1, 6, 3), "spatial_shape": (3, 2), "grid_size": (2, 3)}
+        )
     assert adapter(torch.randn(1, 4, 3), allow_square_infer=True)[0].shape == (1, 5, 2, 2)
 
 
