@@ -156,6 +156,18 @@ continues.
 
 ## 5. Next stage after diagnostics
 
+### Recorded real-server result
+
+Stage 2 has passed on the real server for both checkpoint branches. Student and
+teacher each loaded with `load_fraction=1.0`; original UNIV construction and the
+224×224 feature probe succeeded; and both UNIV-to-MTA smoke tests passed
+checkpoint validation. All selected features and adapter outputs were finite.
+The observed outputs were P3 `[1,256,28,28]`, P4 `[1,256,14,14]`, and P5
+`[1,256,7,7]`.
+
+These diagnostics establish compatibility only; they are not detection training
+or accuracy results.
+
 After Stage 2 passes:
 
 1. Implement the real `UNIVEncoderWrapper`.
