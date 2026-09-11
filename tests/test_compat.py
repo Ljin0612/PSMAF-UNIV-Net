@@ -1,8 +1,9 @@
 """Tests for compatibility with the checked-in original UNIV source."""
 
+import subprocess
+import sys
+import textwrap
 from types import SimpleNamespace
-
-import numpy as np
 
 from psmaf_univ import compat
 
@@ -31,7 +32,24 @@ def test_apply_numpy_legacy_aliases_is_idempotent(monkeypatch):
 
 
 def test_apply_numpy_legacy_aliases_with_real_numpy_is_safe():
-    compat.apply_numpy_legacy_aliases()
-    compat.apply_numpy_legacy_aliases()
+    code = textwrap.dedent(
+        """
+        from psmaf_univ.compat import apply_numpy_legacy_aliases
+        import numpy as np
 
-    assert np.array([1, 2, 3]).sum() == 6
+        apply_numpy_legacy_aliases()
+        apply_numpy_legacy_aliases()
+
+        assert hasattr(np, "float")
+        assert hasattr(np, "int")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
