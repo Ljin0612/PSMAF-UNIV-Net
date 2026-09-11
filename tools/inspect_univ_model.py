@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from psmaf_univ.univ_diagnostics import build_original_univ, model_inventory
+from tools.univ_remediation import missing_module_remediation
 
 
 def discover_candidates(source_root: Path) -> list[dict[str, Any]]:
@@ -80,7 +81,7 @@ def inspect(source_root: Path) -> dict[str, Any]:
             "missing_dependency": missing,
             "incompatible_dependency": "numpy" if numpy_compatibility else None,
             "remediation": (
-                f"Install the unavailable dependency '{missing}' and rerun."
+                missing_module_remediation(missing)
                 if missing else "Restore/fix the original UNIV source or its dependencies and rerun."
             ),
         }

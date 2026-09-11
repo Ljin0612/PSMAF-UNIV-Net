@@ -292,6 +292,23 @@ def test_model_inventory_reports_capabilities():
     assert report["has_attention_api"] is False
 
 
+def test_model_inventory_only_reports_actual_patch_embedding_modules():
+    class PatchEmbed(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.proj = nn.Conv2d(3, 4, 1)
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.patch_embed = PatchEmbed()
+
+    report = model_inventory(Model())
+
+    assert "patch_embed" in report["patch_embedding_names"]
+    assert "patch_embed.proj" not in report["patch_embedding_names"]
+
+
 def test_checkpoint_diagnostic_tool_accepts_a_fake_checkpoint(tmp_path):
     checkpoint = tmp_path / "fake.pt"
     report_path = tmp_path / "report.json"

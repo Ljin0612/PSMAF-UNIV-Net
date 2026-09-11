@@ -59,7 +59,13 @@ def model_inventory(model: nn.Module) -> dict[str, Any]:
     named_modules = dict(model.named_modules())
     named_parameters = dict(model.named_parameters())
     patch_embeddings = [
-        name for name in named_modules if name and ("patch_embed" in name.lower() or "patchembed" in type(named_modules[name]).__name__.lower())
+        name
+        for name, module in named_modules.items()
+        if name
+        and (
+            name.rsplit(".", 1)[-1].lower().startswith("patch_embed")
+            or "patchembed" in type(module).__name__.lower()
+        )
     ]
     positional_embeddings = [name for name in named_parameters if "pos_embed" in name.lower()]
     block_groups = {
