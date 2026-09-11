@@ -1,0 +1,5 @@
+# Reproducible environment for original UNIV / Stage 2 diagnostics.
+# Use this file with Python 3.10; it is not a universal requirement set.
+-r requirements.txt
+
+numpy==1.23.5

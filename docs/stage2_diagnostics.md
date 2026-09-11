@@ -21,12 +21,22 @@ directory before running the commands.
 
 ### NumPy compatibility pre-check
 
-The original UNIV source is known to require NumPy 1.23.x compatibility: it
-uses deprecated aliases such as `np.float`, which NumPy 1.24 removed. The
-recommended reproducible Stage 2 environment therefore pins
-`numpy==1.23.5`. With NumPy 1.24 or newer, feature and model inspection may
-fail during model construction before producing JSON unless the diagnostic
-compatibility handling is enabled.
+The original UNIV source uses deprecated aliases such as `np.float`, which
+NumPy 1.24 removed. The recommended reproducible UNIV diagnostic environment
+is therefore **Python 3.10 + NumPy 1.23.5**. Install it with the dedicated
+`requirements-univ.txt` file (or use `environment.yml`):
+
+```bash
+python3.10 -m pip install -r requirements-univ.txt
+```
+
+The root `requirements.txt` remains compatible across Python versions. On
+Python 3.12 or newer it installs NumPy 1.26.4 or newer, since NumPy 1.23.5 does
+not support those Python versions. The diagnostic tools apply the repository's
+narrow compatibility shim for the known legacy aliases before importing the
+original UNIV model, allowing diagnostics and development with newer NumPy.
+The Python 3.10 + NumPy 1.23.5 environment is still the most faithful choice
+for original UNIV diagnostics and reproducibility.
 
 Verify the active NumPy environment before constructing the model:
 
@@ -38,22 +48,15 @@ print("has np.float:", hasattr(np, "float"))
 PY
 ```
 
-If necessary, install the recommended version with pip:
+To create the recommended environment with conda instead, use the repository
+environment specification:
 
 ```bash
-pip install "numpy==1.23.5"
+conda env create -f environment.yml
 ```
 
-or with conda:
-
-```bash
-conda install -y numpy=1.23.5
-```
-
-The diagnostic tools also apply a narrow compatibility shim for the known
-legacy NumPy aliases before importing the original UNIV model. The pin remains
-the recommended way to reproduce the original environment; the shim does not
-hide unrelated import or model-construction errors.
+The compatibility shim does not hide unrelated import or model-construction
+errors.
 
 ### Run the diagnostics
 

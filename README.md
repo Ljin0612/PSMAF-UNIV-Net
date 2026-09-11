@@ -34,3 +34,25 @@ launch full experiments.
 Stage 2 provides executable JSON diagnostics for the original factory, checkpoint
 compatibility, intermediate features, final semantic tokens, and self-attention.
 Run that workflow before implementing downstream detection training.
+
+## Environment setup
+
+For general development, install `requirements.txt`. Its NumPy requirement is
+selected by Python version so pip remains usable on Python 3.12 and newer:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+For the most faithful original UNIV and Stage 2 diagnostic environment, use
+Python 3.10 with NumPy 1.23.5 via `requirements-univ.txt` or `environment.yml`:
+
+```bash
+python3.10 -m pip install -r requirements-univ.txt
+# Alternatively: conda env create -f environment.yml
+```
+
+NumPy 1.24 removed legacy aliases such as `np.float`. On Python 3.12+, the
+root requirements install NumPy 1.26.4 or newer, and the diagnostic tools use
+the repository compatibility shim for the aliases needed by the original UNIV
+source. See the Stage 2 diagnostics guide for details.
