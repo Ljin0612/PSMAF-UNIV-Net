@@ -16,8 +16,15 @@ def extract_state_dict(checkpoint: Any) -> dict[str, torch.Tensor]:
     return state
 
 
-def _extract_state_dict_and_key(checkpoint: Any) -> tuple[dict[str, torch.Tensor], str | None]:
+def _extract_state_dict_and_key(
+    checkpoint: Any, requested_key: str | None = None
+) -> tuple[dict[str, torch.Tensor], str | None]:
     if isinstance(checkpoint, dict):
+        if requested_key is not None:
+            value = checkpoint.get(requested_key)
+            if isinstance(value, dict):
+                return value, requested_key
+            raise ValueError(f"checkpoint contains no {requested_key!r} state dictionary")
         for key in ("student", "model", "state_dict"):
             value = checkpoint.get(key)
             if isinstance(value, dict):
@@ -144,11 +151,11 @@ def resize_pos_embed_if_needed(
 
 
 def load_univ_checkpoint(
-    model: nn.Module, path: str | Path, *, strict: bool = False
+    model: nn.Module, path: str | Path, *, strict: bool = False, checkpoint_key: str | None = None
 ) -> CheckpointLoadReport:
     """Load a UNIV checkpoint on CPU and return a detailed loading report."""
     checkpoint = torch.load(Path(path), map_location="cpu", weights_only=False)
-    extracted, checkpoint_key = _extract_state_dict_and_key(checkpoint)
+    extracted, selected_checkpoint_key = _extract_state_dict_and_key(checkpoint, checkpoint_key)
     state = {key.removeprefix("module."): value for key, value in extracted.items()}
     candidate_key_count = len(state)
     model_state = model.state_dict()
@@ -190,5 +197,5 @@ def load_univ_checkpoint(
         loaded_parameter_fraction=(
             loaded_parameter_count / model_parameter_count if model_parameter_count else 0.0
         ),
-        checkpoint_key=checkpoint_key,
+        checkpoint_key=selected_checkpoint_key,
     )

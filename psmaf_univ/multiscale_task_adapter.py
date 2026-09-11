@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import cast
 
 from torch import Tensor, nn
+from torch.nn import functional as F
 
 
 def _normalize_shape_alias(
@@ -103,3 +104,36 @@ class MultiscaleTaskAdapter(nn.Module):
                 raise ValueError("features must be BCHW maps or BNC token tensors")
             maps.append(projection(feature))
         return tuple(maps)
+
+
+class MultiScaleTaskAdapter(nn.Module):
+    """Build a P3/P4/P5 pyramid from UNIV stride-8 maps and stride-16 tokens.
+
+    This deliberately small Stage 2 adapter validates the feature boundary only.
+    Semantic BNC features retain the strict explicit-grid behavior of
+    :class:`MultiscaleTaskAdapter`.
+    """
+
+    def __init__(self, spatial_channels: int = 384, semantic_channels: int = 768, out_channels: int = 256) -> None:
+        super().__init__()
+        self.projections = MultiscaleTaskAdapter(
+            [spatial_channels, semantic_channels], out_channels
+        )
+
+    def forward(
+        self,
+        spatial_feature: Tensor,
+        semantic_tokens: Tensor | dict,
+        *,
+        grid_size: tuple[int, int] | None = None,
+        spatial_shape: tuple[int, int] | None = None,
+    ) -> dict[str, Tensor]:
+        """Return P3, P4, and a P4-downsampled P5 feature map."""
+        shape = spatial_shape if spatial_shape is not None else grid_size
+        if spatial_shape is not None and grid_size is not None and spatial_shape != grid_size:
+            raise ValueError("spatial_shape and grid_size must match when both are provided")
+        p3, p4 = self.projections(
+            [spatial_feature, semantic_tokens], spatial_shape=[None, shape]
+        )
+        p5 = F.max_pool2d(p4, kernel_size=2, stride=2)
+        return {"P3": p3, "P4": p4, "P5": p5}

@@ -114,6 +114,31 @@ factory may contain fixed `14x14` masks and 196-token positional embeddings.
 Downstream resolutions such as 512, 640, or 1024 require explicit
 resolution-adaptation support and belong to a later stage.
 
+### UNIV to Multi-scale Task Adapter smoke test
+
+After checkpoint and feature diagnostics pass, validate the first-version
+feature policy: `blocks2.1` supplies the stride-8 spatial map (P3), while
+`norm`/`output.latent` supplies stride-16 semantic tokens (P4). The tool passes
+the explicit `grid_size=(14, 14)` metadata required to reshape those BNC tokens
+and creates P5 by downsampling P4. `blocks1.1` is reported only as an optional
+diagnostic and is not an adapter input.
+
+```bash
+python tools/inspect_univ_mta_features.py \
+  --checkpoint /home/jinlei/checkpoints/UNIV/checkpoint0400.pth \
+  --checkpoint-key student \
+  --image-size 224 224 \
+  --device cuda \
+  > outputs/diagnostics/univ_mta_features_224_student.json
+```
+
+With the default `--adapter-out-channels 256`, the expected P3, P4, and P5
+shapes are `[1, 256, 28, 28]`, `[1, 256, 14, 14]`, and
+`[1, 256, 7, 7]`, respectively. The JSON report also records the checkpoint
+load fraction, selected feature shapes and grid metadata, finite fractions,
+warnings, and optional `blocks1.1` diagnostics. This is shape validation only;
+it does not construct or train a downstream detector.
+
 ## 4. Expected outputs
 
 The diagnostic run should produce or document:
