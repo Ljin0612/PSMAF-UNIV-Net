@@ -151,6 +151,7 @@ def test_checkpoint_load_report_records_resize(tmp_path):
     assert report.load_fraction == 1.0
     assert report.model_parameter_count == 64
     assert report.loaded_parameter_count == 64
+    assert report.loaded_parameter_fraction == 1.0
     assert report.checkpoint_key == "student"
     assert report.missing_keys == []
 
@@ -174,6 +175,7 @@ def test_checkpoint_loader_strips_module_prefix_and_skips_bad_shapes(tmp_path):
     assert report.load_fraction == 0.5
     assert report.model_parameter_count == 8
     assert report.loaded_parameter_count == 6
+    assert report.loaded_parameter_fraction == 0.75
     assert report.skipped_shape_mismatch_keys == ["bias"]
     assert report.missing_keys == ["bias"]
 

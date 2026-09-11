@@ -46,6 +46,7 @@ class CheckpointLoadReport:
     load_fraction: float
     model_parameter_count: int
     loaded_parameter_count: int
+    loaded_parameter_fraction: float
     checkpoint_key: str | None
 
     def __iter__(self) -> Iterator[list[str]]:
@@ -170,6 +171,10 @@ def load_univ_checkpoint(
     loaded_keys = [key for key in state if key in model_state]
     loaded_count = len(loaded_keys)
     parameter_keys = set(dict(model.named_parameters()))
+    model_parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    loaded_parameter_count = sum(
+        model_state[key].numel() for key in loaded_keys if key in parameter_keys
+    )
     return CheckpointLoadReport(
         missing_keys=list(incompatible.missing_keys),
         unexpected_keys=list(incompatible.unexpected_keys),
@@ -180,9 +185,10 @@ def load_univ_checkpoint(
         candidate_key_count=candidate_key_count,
         loaded_key_count=loaded_count,
         load_fraction=loaded_count / len(model_state) if model_state else 0.0,
-        model_parameter_count=sum(parameter.numel() for parameter in model.parameters()),
-        loaded_parameter_count=sum(
-            model_state[key].numel() for key in loaded_keys if key in parameter_keys
+        model_parameter_count=model_parameter_count,
+        loaded_parameter_count=loaded_parameter_count,
+        loaded_parameter_fraction=(
+            loaded_parameter_count / model_parameter_count if model_parameter_count else 0.0
         ),
         checkpoint_key=checkpoint_key,
     )

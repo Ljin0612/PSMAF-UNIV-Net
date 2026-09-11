@@ -79,6 +79,29 @@ per-class results, and mean/standard deviation across seeds. Store machine-reada
 outputs outside Git and aggregate them with `tools/collect_results.py` once its
 schema is finalized.
 
+## Controlled experiment protocol
+
+Before running the first baseline for a dataset, record the train, validation,
+and test split manifests; preprocessing and augmentation; checkpoint branch;
+backbone freezing policy; optimizer and scheduler; training budget; stopping and
+checkpoint-selection rule; evaluation code version; hardware; and random seeds.
+Reuse that protocol unchanged for every comparison in the same evaluation
+setting. A component comparison is valid only when the input setting and all
+non-component choices match.
+
+Select checkpoints using the validation split only and evaluate the selected
+checkpoint on the test split once per seed. Do not tune hyperparameters, choose
+seeds, or select checkpoints using test-set results. Use the same predeclared
+seed list for every variant, report every seed, and summarize the arithmetic
+mean and sample standard deviation without dropping failed or unfavorable runs.
+If a run fails, retain it in the experiment record with its failure reason and
+do not silently replace its seed.
+
+Report compute measurements under a shared measurement protocol: the same
+hardware, batch size, input size, precision, and warm-up/timed-iteration counts.
+When those conditions cannot be held constant, label the measurements as
+non-comparable instead of using them for a speed or memory claim.
+
 ## Evaluation settings
 
 Every experiment must select and label one of these settings and keep its metrics
