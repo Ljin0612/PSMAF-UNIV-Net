@@ -1,4 +1,6 @@
 name: psmaf-univ
+# Reproducible original UNIV / Stage 2 diagnostic environment. Python is
+# intentionally constrained because NumPy 1.23.5 does not support Python 3.12+.
 channels:
   - pytorch
   - conda-forge
