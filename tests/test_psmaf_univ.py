@@ -201,6 +201,51 @@ def test_feature_dict_and_opt_in_square_inference():
     assert adapter(torch.randn(1, 4, 3), allow_square_infer=True)[0].shape == (1, 5, 2, 2)
 
 
+@pytest.mark.parametrize(
+    ("spatial_shape", "grid_size"),
+    [
+        ((2, 3), [(2, 3)]),
+        ([(2, 3)], (2, 3)),
+    ],
+)
+def test_single_level_equivalent_shape_aliases(spatial_shape, grid_size):
+    adapter = MultiscaleTaskAdapter([3], 5)
+
+    output = adapter(
+        torch.randn(1, 6, 3), spatial_shape=spatial_shape, grid_size=grid_size
+    )[0]
+
+    assert output.shape == (1, 5, 2, 3)
+
+
+def test_single_level_conflicting_shape_aliases_raise():
+    adapter = MultiscaleTaskAdapter([3], 5)
+
+    with pytest.raises(ValueError, match="spatial_shape and grid_size must match"):
+        adapter(
+            torch.randn(1, 6, 3), spatial_shape=(2, 3), grid_size=[(3, 2)]
+        )
+
+
+def test_multilevel_shape_aliases_are_compared_per_level():
+    adapter = MultiscaleTaskAdapter([3, 4], 2)
+    features = [torch.randn(1, 6, 3), torch.randn(1, 2, 4)]
+
+    outputs = adapter(
+        features,
+        spatial_shape=[(2, 3), (1, 2)],
+        grid_size=[(2, 3), (1, 2)],
+    )
+    assert [tuple(output.shape) for output in outputs] == [(1, 2, 2, 3), (1, 2, 1, 2)]
+
+    with pytest.raises(ValueError, match="spatial_shape and grid_size must match"):
+        adapter(
+            features,
+            spatial_shape=[(2, 3), (1, 2)],
+            grid_size=[(2, 3), (2, 1)],
+        )
+
+
 def test_rectangular_shapes_are_validated_for_each_adapter_level():
     adapter = MultiscaleTaskAdapter([3, 4], 2)
     outputs = adapter(
