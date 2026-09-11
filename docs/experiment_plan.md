@@ -25,20 +25,44 @@
 * Do not set an mAP target yet; this stage validates the adapter interface and
   feature shapes only.
 
-### Stage 4: Original UNIV direct downstream baseline
+### Stage 4: Single-stream downstream baselines
 
-* Build a single-stream UNIV baseline with a Mask R-CNN- or Faster R-CNN-style
-  detection head.
-* Start with M3FD-IR.
-* Compare random initialization, student and teacher checkpoints, a frozen
-  backbone, partial fine-tuning, and LoRA when available.
+Run these baselines on the single-stream protocol, starting with M3FD-IR:
 
-### Stage 5: PSMAF-UNIV full detection model
+* Random initialization + Mask R-CNN- or Faster R-CNN-style detection head.
+* UNIV direct + the same detection head.
+* UNIV + `MultiScaleTaskAdapter` (MTA) + the same detection head. This is a
+  required downstream baseline, not just an adapter shape check, and isolates
+  whether MTA helps independently of Pseudo-Semantic Guidance (PSG) and
+  Multi-Scale Adaptive Fusion (MSAF).
 
-Build and evaluate the complete paired detection path:
+The UNIV direct and UNIV + MTA baselines must use the same data split, input
+modality, detection head, and training recipe. For the UNIV baselines, compare
+student versus teacher checkpoints and frozen versus partially fine-tuned
+backbones; include LoRA when available. Report each variant explicitly rather
+than combining results across these choices.
 
-`paired RGB-IR input -> UNIV-based encoder/wrapper -> Multi-scale Task Adapter ->`
-`Pseudo-Semantic Guidance -> PSMAF Fusion -> Mask/Faster R-CNN-style detection head`
+### Stage 5: Paired RGB-IR controlled baselines
+
+All methods in this stage must consume the same paired RGB-IR input and use the
+same data split, detection head, and training recipe. Include:
+
+* Paired simple-add fusion.
+* Paired concatenation fusion.
+* Paired UNIV + MTA without PSG.
+* Paired UNIV + MTA without MSAF.
+* Paired UNIV + MTA + PSG only.
+* Paired UNIV + MTA + MSAF only.
+* Full PSMAF-UNIV, using the complete paired detection path:
+
+  `paired RGB-IR input -> UNIV-based encoder/wrapper -> Multi-scale Task Adapter ->`
+  `Pseudo-Semantic Guidance -> PSMAF Fusion -> Mask/Faster R-CNN-style detection head`
+
+Use comparisons within this paired-input group for strict component attribution,
+especially comparisons between full PSMAF-UNIV and the paired controls. Do not
+claim that full paired PSMAF-UNIV directly improves over the single-stream UNIV
+direct baseline; if both results are discussed, clearly state that their input
+protocols differ and do not treat the comparison as component attribution.
 
 ### Stage 6: Segmentation validation
 
