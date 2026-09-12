@@ -57,6 +57,14 @@ def test_dataset_clamps_tiny_floating_point_boundary_overflow(tmp_path):
     assert target["boxes"][0].tolist() == pytest.approx([0, 0, 224, 224])
 
 
+def test_dataset_accepts_tiny_boundary_overflow_with_positive_float32_width(tmp_path):
+    label = "0 1.00000005 0.5 0.0000002 0.2\n"
+
+    _, target = M3FDDetectionDataset(make_sample(tmp_path, label))[0]
+
+    assert target["boxes"][0, 2] > target["boxes"][0, 0]
+
+
 @pytest.mark.parametrize(
     "label",
     [
@@ -78,10 +86,30 @@ def test_dataset_rejects_box_collapsed_after_clamping(tmp_path, label):
     assert "original YOLO values=" in message
     assert "computed normalized xyxy before clamping=" in message
     assert "clamped normalized xyxy=" in message
-    assert "degenerate box after clamping" in message
+    assert "scaled float32 xyxy=" in message
+    assert "degenerate box after float32 scaling/conversion" in message
 
 
-@pytest.mark.parametrize("label", ["0 0.5 0.5 0 0.2", "0 0.5 0.5 0.2 0"])
+@pytest.mark.parametrize(
+    "label",
+    ["0 1.0 0.5 1e-12 0.2", "0 0.5 1.0 0.2 1e-12"],
+)
+def test_dataset_rejects_box_collapsed_by_float32_conversion(tmp_path, label):
+    with pytest.raises(ValueError, match="degenerate box after float32 scaling/conversion") as error:
+        M3FDDetectionDataset(make_sample(tmp_path, label))[0]
+
+    message = str(error.value)
+    assert "label row 1" in message
+    assert "original YOLO values=" in message
+    assert "computed normalized xyxy before clamping=" in message
+    assert "clamped normalized xyxy=" in message
+    assert "scaled float32 xyxy=" in message
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["0 0.5 0.5 0 0.2", "0 0.5 0.5 0.2 0", "0 0.5 0.5 -0.1 0.2", "0 0.5 0.5 0.2 -0.1"],
+)
 def test_dataset_rejects_zero_sized_box(tmp_path, label):
     with pytest.raises(ValueError, match="invalid normalized box"):
         M3FDDetectionDataset(make_sample(tmp_path, label))[0]
