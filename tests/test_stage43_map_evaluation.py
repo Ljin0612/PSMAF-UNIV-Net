@@ -13,6 +13,7 @@ from detection.scripts.eval_univ_mta_fasterrcnn_m3fd import (
     evaluation_metadata,
     prediction_to_evaluation,
     target_to_evaluation,
+    validate_normalization_args,
 )
 from detection.scripts.train_univ_mta_fasterrcnn_m3fd import (
     UNIV_IR_IMAGE_MEAN,
@@ -51,6 +52,30 @@ def test_evaluator_defaults_to_univ_ir_normalization():
     args = build_arg_parser().parse_args(["--checkpoint", "detector.pth"])
     assert args.image_mean == list(UNIV_IR_IMAGE_MEAN)
     assert args.image_std == list(UNIV_IR_IMAGE_STD)
+
+
+def test_default_univ_ir_normalization_is_valid():
+    validate_normalization_args(UNIV_IR_IMAGE_MEAN, UNIV_IR_IMAGE_STD)
+
+
+def test_custom_positive_finite_normalization_is_valid():
+    validate_normalization_args([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+
+@pytest.mark.parametrize(
+    "image_std",
+    ([0.0, 0.2, 0.3], [-0.1, 0.2, 0.3], [float("nan"), 0.2, 0.3],
+     [float("inf"), 0.2, 0.3]),
+)
+def test_invalid_image_std_is_rejected(image_std):
+    with pytest.raises(ValueError, match="image-std must contain three finite positive values"):
+        validate_normalization_args([0.1, 0.2, 0.3], image_std)
+
+
+@pytest.mark.parametrize("invalid_value", [float("nan"), float("inf")])
+def test_nonfinite_image_mean_is_rejected(invalid_value):
+    with pytest.raises(ValueError, match="image-mean must contain three finite values"):
+        validate_normalization_args([invalid_value, 0.2, 0.3], [0.1, 0.2, 0.3])
 
 
 def test_evaluation_detector_passes_custom_normalization_and_zero_internal_threshold(monkeypatch):
