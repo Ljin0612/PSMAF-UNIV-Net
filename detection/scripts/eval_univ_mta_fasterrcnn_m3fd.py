@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 from typing import Mapping, Sequence
@@ -24,6 +25,20 @@ from psmaf_univ.m3fd_detection import M3FD_CLASS_NAMES, M3FDDetectionDataset, de
 from psmaf_univ.univ_mta_detection_backbone import UNIVMTADetectionBackbone
 
 IOU_THRESHOLDS = tuple(round(0.50 + index * 0.05, 2) for index in range(10))
+
+
+def validate_normalization_args(
+    image_mean: Sequence[float], image_std: Sequence[float]
+) -> None:
+    """Reject normalization statistics that could produce invalid detector inputs."""
+    if len(image_mean) != 3 or not all(math.isfinite(value) for value in image_mean):
+        raise ValueError("image-mean must contain three finite values")
+    if (
+        len(image_std) != 3
+        or not all(math.isfinite(value) for value in image_std)
+        or not all(value > 0 for value in image_std)
+    ):
+        raise ValueError("image-std must contain three finite positive values")
 
 
 def prediction_to_evaluation(
@@ -199,7 +214,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    try:
+        validate_normalization_args(args.image_mean, args.image_std)
+    except ValueError as error:
+        parser.error(str(error))
     if args.image_size != 224:
         raise SystemExit("original UNIV currently requires --image-size 224")
     if args.batch_size < 1 or not 0 <= args.score_threshold <= 1:
