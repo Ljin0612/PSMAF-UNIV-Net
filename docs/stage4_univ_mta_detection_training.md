@@ -97,9 +97,18 @@ The evaluator strictly loads the trained detector, uses the existing loader's
 YOLO-to-xyxy targets, and reports 101-point interpolated AP from IoU 0.50 through
 0.95. The JSON and console report contain `mAP50`, `mAP50_95`, `AP75`, named
 per-class AP50, image/ground-truth/prediction counts, split, checkpoint branch,
-and score threshold. The default threshold is zero so AP ranking uses all
-detections. Classes without ground truth have JSON `null` AP and are excluded
-from mean AP.
+and score-threshold protocol. Unlike the smoke inference sanity check, this is
+the mAP evaluation. It disables Faster R-CNN's hidden internal `0.05` ROI score
+cutoff and applies `--score-threshold` (zero by default) in the evaluation
+script, so AP ranking and prediction counts use every requested detection.
+
+Evaluation defaults to the same replicated-channel UNIV IR normalization as
+training: `image_mean=[0.5338, 0.5338, 0.5338]` and
+`image_std=[0.2519, 0.2519, 0.2519]`. If training used custom normalization,
+pass those same values with `--image-mean R G B --image-std R G B` during
+evaluation. The selected normalization, requested threshold, internal threshold,
+and filtering stage are recorded in the JSON. Classes without ground truth have
+JSON `null` AP and are excluded from mean AP.
 
 ## Interpreting failures
 
