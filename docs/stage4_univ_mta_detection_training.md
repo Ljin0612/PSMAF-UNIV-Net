@@ -1,4 +1,4 @@
-# Stage 4: UNIV + MTA detection training smoke test
+# Stage 4: UNIV + MTA detection training and evaluation
 
 ## Purpose and scope
 
@@ -8,10 +8,15 @@ YOLO target parsing, Faster R-CNN training losses, backward propagation, one or
 more optimizer steps, checkpoint output, and a lightweight validation forward.
 
 This remains single-stream and IR-first. It deliberately does **not** implement
-RGB/IR pairing, PSMAF fusion, PSG/MSAF, YOLO, or full COCO mAP. Establishing a
+RGB/IR pairing, PSMAF fusion, PSG/MSAF, or YOLO. Establishing a
 small, debuggable detection baseline first prevents future fusion work from
 masking errors in data parsing, the UNIV feature boundary, or detector training.
 Full PSMAF-UNIV begins only after this isolated boundary is reliable.
+
+The validation forward performed after training is a **sanity check only**.
+Finite prediction scores show that inference is numerically viable; they are not
+a detection-quality measurement and must not be reported as mAP. Stage 4.3 uses
+the separate evaluator below for COCO-style AP.
 
 ## Smoke command
 
@@ -57,6 +62,45 @@ losses, and the validation scaffold:
 M3FD class IDs remain `0..5` in the dataset target. The training boundary shifts
 them to `1..6` because torchvision reserves detector label zero for background.
 
+## Full one-epoch frozen training
+
+After smoke validation, the frozen baseline can be trained for exactly one full
+epoch by setting the step bound to the number of training samples (3360 at batch
+size one). This command does not run automatically:
+
+```bash
+python detection/scripts/train_univ_mta_fasterrcnn_m3fd.py \
+  --data-root /home/jinlei/database/M3FD_Detection \
+  --checkpoint /home/jinlei/checkpoints/UNIV/checkpoint0400.pth \
+  --checkpoint-key student --split train --val-split val \
+  --epochs 1 --batch-size 1 --image-size 224 \
+  --max-train-steps 3360 --freeze-univ true \
+  --output-dir outputs/stage4_full_student
+```
+
+The training directory contains `stage4_smoke_checkpoint.pth` (the filename is
+retained for compatibility) and `training_summary.json`.
+
+## Stage 4.3 COCO-style mAP evaluation
+
+```bash
+python detection/scripts/eval_univ_mta_fasterrcnn_m3fd.py \
+  --data-root /home/jinlei/database/M3FD_Detection \
+  --checkpoint outputs/stage4_full_student/stage4_smoke_checkpoint.pth \
+  --univ-checkpoint /home/jinlei/checkpoints/UNIV/checkpoint0400.pth \
+  --checkpoint-key student --split val \
+  --batch-size 1 --image-size 224 --device cuda \
+  --output-json outputs/stage4_full_student/val_metrics.json
+```
+
+The evaluator strictly loads the trained detector, uses the existing loader's
+YOLO-to-xyxy targets, and reports 101-point interpolated AP from IoU 0.50 through
+0.95. The JSON and console report contain `mAP50`, `mAP50_95`, `AP75`, named
+per-class AP50, image/ground-truth/prediction counts, split, checkpoint branch,
+and score threshold. The default threshold is zero so AP ranking uses all
+detections. Classes without ground truth have JSON `null` AP and are excluded
+from mean AP.
+
 ## Interpreting failures
 
 - A split/image/label error means the server tree or split stems do not match
@@ -68,4 +112,5 @@ them to `1..6` because torchvision reserves detector label zero for background.
 - A missing/non-finite loss points to the Faster R-CNN training boundary.
 - A backward or optimizer exception means the trainable graph is not viable.
 - A non-finite validation score means training completed but inference is not
-  numerically sound. Full accuracy and mAP assessment are deferred to Stage 5.
+  numerically sound. It still says nothing about accuracy; use the Stage 4.3
+  metrics JSON for final baseline detection performance.
