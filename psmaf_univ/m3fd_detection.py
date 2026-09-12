@@ -1,4 +1,4 @@
-"""Read-only validation helpers for the M3FD detection dataset layout."""
+"""Validation helpers and a torchvision-style M3FD detection dataset."""
 
 from __future__ import annotations
 
@@ -8,6 +8,100 @@ from typing import Any
 
 M3FD_CLASS_NAMES = ("people", "car", "bus", "motorcycle", "lamp", "truck")
 SPLITS = ("train", "val", "test")
+DETECTION_SPLITS = (*SPLITS, "smoke_train", "smoke_val", "smoke_test")
+
+
+def yolo_labels_to_target(rows: list[list[float]], width: int, height: int):
+    """Convert validated normalized YOLO rows to a torchvision target payload."""
+    import torch
+
+    boxes, labels = [], []
+    for line_number, row in enumerate(rows, 1):
+        if len(row) != 5:
+            raise ValueError(f"label row {line_number} must contain 5 values; got {len(row)}")
+        class_value, cx, cy, box_width, box_height = row
+        if not class_value.is_integer() or not 0 <= int(class_value) < len(M3FD_CLASS_NAMES):
+            raise ValueError(f"invalid class ID {class_value:g} on label row {line_number}")
+        values = (cx, cy, box_width, box_height)
+        if not all(torch.isfinite(torch.tensor(value)).item() for value in values):
+            raise ValueError(f"invalid non-finite box coordinates on label row {line_number}")
+        x1, y1 = cx - box_width / 2, cy - box_height / 2
+        x2, y2 = cx + box_width / 2, cy + box_height / 2
+        if box_width <= 0 or box_height <= 0 or x1 < 0 or y1 < 0 or x2 > 1 or y2 > 1:
+            raise ValueError(
+                f"invalid normalized box coordinates on label row {line_number}: "
+                f"cx={cx:g}, cy={cy:g}, w={box_width:g}, h={box_height:g}"
+            )
+        boxes.append([x1 * width, y1 * height, x2 * width, y2 * height])
+        labels.append(int(class_value))
+    box_tensor = torch.tensor(boxes, dtype=torch.float32).reshape(-1, 4)
+    label_tensor = torch.tensor(labels, dtype=torch.int64)
+    return box_tensor, label_tensor
+
+
+class M3FDDetectionDataset:
+    """Load one IR stream and YOLO annotations from the released server layout."""
+
+    def __init__(self, root: str | Path, split: str = "smoke_train", image_size: int = 224) -> None:
+        if split not in DETECTION_SPLITS:
+            raise ValueError(f"unsupported M3FD split {split!r}; expected one of {DETECTION_SPLITS}")
+        if image_size <= 0:
+            raise ValueError("image_size must be positive")
+        self.root = Path(root).expanduser()
+        self.split = split
+        self.image_size = image_size
+        split_file = self.root / "meta" / f"{split}.txt"
+        if not split_file.is_file():
+            raise FileNotFoundError(f"M3FD split file does not exist: {split_file}")
+        self.stems = [line.strip() for line in split_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if not self.stems:
+            raise ValueError(f"M3FD split contains no samples: {split_file}")
+
+    def __len__(self) -> int:
+        return len(self.stems)
+
+    def __getitem__(self, index: int):
+        import numpy as np
+        import torch
+        from PIL import Image
+
+        entry = Path(self.stems[index])
+        stem = entry.stem if entry.suffix else entry.name
+        image_path = self.root / "ir" / f"{stem}.png"
+        label_path = self.root / "labels" / f"{stem}.txt"
+        if not image_path.is_file():
+            raise FileNotFoundError(f"M3FD IR image does not exist: {image_path}")
+        if not label_path.is_file():
+            raise FileNotFoundError(f"M3FD label does not exist: {label_path}")
+        with Image.open(image_path) as source:
+            image = source.convert("RGB").resize((self.image_size, self.image_size))
+            image_tensor = torch.from_numpy(np.asarray(image).copy()).permute(2, 0, 1).float().div(255)
+        rows = []
+        for line_number, line in enumerate(label_path.read_text(encoding="utf-8").splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                rows.append([float(value) for value in line.split()])
+            except ValueError as error:
+                raise ValueError(f"invalid numeric label at {label_path}:{line_number}") from error
+        try:
+            boxes, labels = yolo_labels_to_target(rows, self.image_size, self.image_size)
+        except ValueError as error:
+            raise ValueError(f"invalid M3FD label {label_path}: {error}") from error
+        area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        target = {
+            "boxes": boxes,
+            "labels": labels,
+            "image_id": torch.tensor([index], dtype=torch.int64),
+            "area": area,
+            "iscrowd": torch.zeros(labels.shape[0], dtype=torch.int64),
+        }
+        return image_tensor, target
+
+
+def detection_collate_fn(batch):
+    """Keep variable-length detection targets as a list."""
+    return tuple(zip(*batch))
 
 
 def _find_directory(root: Path, names: tuple[str, ...]) -> Path | None:
