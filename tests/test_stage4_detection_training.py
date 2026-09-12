@@ -38,6 +38,17 @@ def test_dataset_reads_meta_stem_and_converts_yolo_box(tmp_path):
     assert target["area"].tolist() == pytest.approx([6272])
 
 
+def test_dataset_accepts_m3fd_02639_border_touching_box(tmp_path):
+    label = "5 0.8589743589743589 0.5035714285714287 0.2794871794871795 0.992857142857143\n"
+
+    _, target = M3FDDetectionDataset(make_sample(tmp_path, label))[0]
+
+    assert target["labels"].tolist() == [5]
+    assert target["boxes"][0].tolist() == pytest.approx(
+        [161.1076923076923, 1.6000000000000192, 223.7128205128205, 224.0]
+    )
+
+
 def test_dataset_handles_empty_label(tmp_path):
     _, target = M3FDDetectionDataset(make_sample(tmp_path, ""))[0]
     assert target["boxes"].shape == (0, 4)
