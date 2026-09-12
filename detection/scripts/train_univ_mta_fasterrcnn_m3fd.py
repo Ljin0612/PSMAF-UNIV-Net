@@ -52,6 +52,7 @@ def build_detector(
     image_size: int = 224,
     image_mean=UNIV_IR_IMAGE_MEAN,
     image_std=UNIV_IR_IMAGE_STD,
+    box_score_thresh=None,
 ):
     """Build a three-level Faster R-CNN head without adding YOLO or fusion."""
     from torchvision.models.detection import FasterRCNN
@@ -65,10 +66,14 @@ def build_detector(
         aspect_ratios=((0.5, 1.0, 2.0),) * 3,
     )
     roi_pooler = MultiScaleRoIAlign(featmap_names=["P3", "P4", "P5"], output_size=7, sampling_ratio=2)
+    detector_kwargs = {}
+    if box_score_thresh is not None:
+        detector_kwargs["box_score_thresh"] = box_score_thresh
     return FasterRCNN(
         backbone, num_classes=7, min_size=image_size, max_size=image_size,
         rpn_anchor_generator=anchors, box_roi_pool=roi_pooler,
         image_mean=list(image_mean), image_std=list(image_std),
+        **detector_kwargs,
     )
 
 

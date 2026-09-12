@@ -15,7 +15,11 @@ if str(ROOT) not in sys.path:
 
 import torch
 
-from detection.scripts.train_univ_mta_fasterrcnn_m3fd import build_detector
+from detection.scripts.train_univ_mta_fasterrcnn_m3fd import (
+    UNIV_IR_IMAGE_MEAN,
+    UNIV_IR_IMAGE_STD,
+    build_detector,
+)
 from psmaf_univ.m3fd_detection import M3FD_CLASS_NAMES, M3FDDetectionDataset, detection_collate_fn
 from psmaf_univ.univ_mta_detection_backbone import UNIVMTADetectionBackbone
 
@@ -149,6 +153,28 @@ def _checkpoint_state(payload, checkpoint_key: str):
     return candidate
 
 
+def build_evaluation_detector(backbone: torch.nn.Module, args: argparse.Namespace):
+    """Build with normalization from the protocol and no hidden score filtering."""
+    return build_detector(
+        backbone,
+        args.image_size,
+        image_mean=args.image_mean,
+        image_std=args.image_std,
+        box_score_thresh=0.0,
+    )
+
+
+def evaluation_metadata(args: argparse.Namespace, model: torch.nn.Module) -> dict:
+    """Record the score-filtering and normalization protocol in the result artifact."""
+    return {
+        "requested_score_threshold": args.score_threshold,
+        "internal_box_score_thresh": float(model.roi_heads.score_thresh),
+        "score_threshold_applied_stage": "evaluation_script",
+        "image_mean": list(args.image_mean),
+        "image_std": list(args.image_std),
+    }
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, default=Path("/home/jinlei/database/M3FD_Detection"))
@@ -165,6 +191,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output-json", type=Path, default=Path("outputs/stage4_eval/metrics.json"))
     parser.add_argument("--score-threshold", type=float, default=0.0)
+    parser.add_argument("--image-mean", type=float, nargs=3, default=list(UNIV_IR_IMAGE_MEAN))
+    parser.add_argument("--image-std", type=float, nargs=3, default=list(UNIV_IR_IMAGE_STD))
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--source-root", type=Path, default=ROOT / "UNIV-main")
     return parser
@@ -183,7 +211,7 @@ def main() -> None:
     backbone, _ = UNIVMTADetectionBackbone.from_checkpoint(
         args.univ_checkpoint, checkpoint_key=args.checkpoint_key, source_root=args.source_root, freeze_univ=True
     )
-    model = build_detector(backbone, args.image_size).to(device)
+    model = build_evaluation_detector(backbone, args).to(device)
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     model.load_state_dict(_checkpoint_state(payload, args.checkpoint_key), strict=True)
     model.eval()
@@ -196,6 +224,7 @@ def main() -> None:
     results = compute_map(predictions, targets)
     results.update({"stage": "4.3", "dataset": "M3FD-IR", "split": args.split,
                     "checkpoint_key": args.checkpoint_key, "score_threshold": args.score_threshold})
+    results.update(evaluation_metadata(args, model))
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(results, indent=2))
