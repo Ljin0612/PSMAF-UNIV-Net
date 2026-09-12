@@ -16,14 +16,16 @@ Full PSMAF-UNIV begins only after this isolated boundary is reliable.
 ## Smoke command
 
 The defaults are one epoch, batch size one, at most five optimizer steps, a
-224-pixel input, frozen UNIV parameters, and the smoke splits:
+224-pixel input, frozen UNIV parameters, and the released `train`/`val` splits.
+Faster R-CNN normalizes all three replicated IR channels with the UNIV IR
+statistics (mean `0.5338`, standard deviation `0.2519`):
 
 ```bash
 python detection/scripts/train_univ_mta_fasterrcnn_m3fd.py \
   --data-root /home/jinlei/database/M3FD_Detection \
   --checkpoint /home/jinlei/checkpoints/UNIV/checkpoint0400.pth \
   --checkpoint-key student \
-  --split smoke_train --val-split smoke_val \
+  --split train --val-split val \
   --epochs 1 --batch-size 1 --image-size 224 \
   --max-train-steps 5 --freeze-univ true \
   --output-dir outputs/stage4_smoke
@@ -34,11 +36,18 @@ Use `--checkpoint-key teacher` to exercise the teacher branch. Set
 The script never launches a long run unless its bounded defaults are explicitly
 changed.
 
+Use `--image-mean R G B` and `--image-std R G B` to override normalization only
+for a deliberately different protocol. Local `smoke_train`/`smoke_val` split
+files remain supported by passing their names explicitly, but they are optional
+custom splits and are not required for the released dataset layout. For smoke
+training, keep the released splits and bound work with `--max-train-steps 5`.
+
 ## Expected outputs
 
 `stage4_smoke_checkpoint.pth` contains model and optimizer state plus the number
 of completed steps. `training_summary.json` records dataset counts, checkpoint
-load diagnostics, final Faster R-CNN losses, and the validation scaffold:
+load diagnostics, selected image mean and standard deviation, final Faster R-CNN
+losses, and the validation scaffold:
 
 - number of detections;
 - prediction box tensor shape;
