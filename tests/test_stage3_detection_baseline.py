@@ -26,6 +26,30 @@ def test_m3fd_path_checker_accepts_synthetic_tree(tmp_path):
     assert all(report["splits"][split]["matched_pairs"] == 1 for split in ("train", "val", "test"))
 
 
+def test_m3fd_checker_accepts_server_layout_without_classes_file(tmp_path):
+    root = tmp_path / "M3FD_Detection"
+    for directory in ("Annotation", "ir", "labels", "meta", "vi"):
+        (root / directory).mkdir(parents=True)
+
+    for split, stem in (("train", "03905"), ("val", "02579"), ("test", "04107")):
+        (root / "meta" / f"{split}.txt").write_text(f"{stem}\n", encoding="utf-8")
+        (root / "ir" / f"{stem}.png").write_bytes(b"synthetic")
+        (root / "vi" / f"{stem}.png").write_bytes(b"synthetic")
+        (root / "labels" / f"{stem}.txt").write_text(
+            "0 0.5 0.5 0.2 0.2\n", encoding="utf-8"
+        )
+
+    report = inspect_m3fd_detection(root)
+
+    assert report["passed"] is True
+    assert report["class_names"] == list(M3FD_CLASS_NAMES)
+    assert report["class_names_file"] is None
+    assert report["class_names_correct"] is True
+    assert report["visible_image_directory"] == str((root / "vi").resolve())
+    assert report["split_files"]["train"] == str((root / "meta/train.txt").resolve())
+    assert all(report["splits"][split]["matched_pairs"] == 1 for split in ("train", "val", "test"))
+
+
 def test_m3fd_checker_reports_empty_and_missing_labels(tmp_path):
     root = make_dataset(tmp_path / "M3FD")
     (root / "labels/train_sample.txt").write_text("")
