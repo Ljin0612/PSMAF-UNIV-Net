@@ -62,10 +62,14 @@ def test_custom_positive_finite_normalization_is_valid():
     validate_normalization_args([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
 
+def test_finite_float32_image_mean_is_valid():
+    validate_normalization_args([-3.4e38, 0.0, 3.4e38], [0.1, 0.2, 0.3])
+
+
 @pytest.mark.parametrize(
     "image_std",
     ([0.0, 0.2, 0.3], [-0.1, 0.2, 0.3], [float("nan"), 0.2, 0.3],
-     [float("inf"), 0.2, 0.3]),
+     [float("inf"), 0.2, 0.3], [1e-320, 0.2, 0.3]),
 )
 def test_invalid_image_std_is_rejected(image_std):
     with pytest.raises(ValueError, match="image-std must contain three finite positive values"):
@@ -76,6 +80,11 @@ def test_invalid_image_std_is_rejected(image_std):
 def test_nonfinite_image_mean_is_rejected(invalid_value):
     with pytest.raises(ValueError, match="image-mean must contain three finite values"):
         validate_normalization_args([invalid_value, 0.2, 0.3], [0.1, 0.2, 0.3])
+
+
+def test_image_mean_that_overflows_float32_is_rejected():
+    with pytest.raises(ValueError, match="image-mean must contain three finite values representable as float32"):
+        validate_normalization_args([1e40, 0.2, 0.3], [0.1, 0.2, 0.3])
 
 
 def test_evaluation_detector_passes_custom_normalization_and_zero_internal_threshold(monkeypatch):

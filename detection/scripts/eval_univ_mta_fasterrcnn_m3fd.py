@@ -40,6 +40,19 @@ def validate_normalization_args(
     ):
         raise ValueError("image-std must contain three finite positive values")
 
+    # GeneralizedRCNNTransform casts these values to the input image dtype.  Check
+    # that cast explicitly so values that overflow or underflow in float32 cannot
+    # introduce infinities or division by zero during detector normalization.
+    mean_tensor = torch.tensor(image_mean, dtype=torch.float32)
+    std_tensor = torch.tensor(image_std, dtype=torch.float32)
+    if not torch.isfinite(mean_tensor).all().item():
+        raise ValueError("image-mean must contain three finite values representable as float32")
+    if not (torch.isfinite(std_tensor).all() and (std_tensor > 0).all()).item():
+        raise ValueError(
+            "image-std must contain three finite positive values representable as "
+            "positive float32 values"
+        )
+
 
 def prediction_to_evaluation(
     prediction: Mapping[str, torch.Tensor], score_threshold: float = 0.0
