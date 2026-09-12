@@ -9,6 +9,7 @@ from typing import Any
 M3FD_CLASS_NAMES = ("people", "car", "bus", "motorcycle", "lamp", "truck")
 SPLITS = ("train", "val", "test")
 DETECTION_SPLITS = (*SPLITS, "smoke_train", "smoke_val", "smoke_test")
+YOLO_BOUNDARY_TOLERANCE = 1e-6
 
 
 def yolo_labels_to_target(rows: list[list[float]], width: int, height: int):
@@ -27,11 +28,20 @@ def yolo_labels_to_target(rows: list[list[float]], width: int, height: int):
             raise ValueError(f"invalid non-finite box coordinates on label row {line_number}")
         x1, y1 = cx - box_width / 2, cy - box_height / 2
         x2, y2 = cx + box_width / 2, cy + box_height / 2
-        if box_width <= 0 or box_height <= 0 or x1 < 0 or y1 < 0 or x2 > 1 or y2 > 1:
+        if (
+            box_width <= 0
+            or box_height <= 0
+            or x1 < -YOLO_BOUNDARY_TOLERANCE
+            or y1 < -YOLO_BOUNDARY_TOLERANCE
+            or x2 > 1 + YOLO_BOUNDARY_TOLERANCE
+            or y2 > 1 + YOLO_BOUNDARY_TOLERANCE
+        ):
             raise ValueError(
                 f"invalid normalized box coordinates on label row {line_number}: "
                 f"cx={cx:g}, cy={cy:g}, w={box_width:g}, h={box_height:g}"
             )
+        x1, y1 = max(0.0, x1), max(0.0, y1)
+        x2, y2 = min(1.0, x2), min(1.0, y2)
         boxes.append([x1 * width, y1 * height, x2 * width, y2 * height])
         labels.append(int(class_value))
     box_tensor = torch.tensor(boxes, dtype=torch.float32).reshape(-1, 4)
