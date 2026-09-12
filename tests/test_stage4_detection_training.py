@@ -49,6 +49,49 @@ def test_dataset_accepts_m3fd_02639_border_touching_box(tmp_path):
     )
 
 
+def test_dataset_clamps_tiny_floating_point_boundary_overflow(tmp_path):
+    label = "0 0.5 0.5 1.0000002 1.0000002\n"
+
+    _, target = M3FDDetectionDataset(make_sample(tmp_path, label))[0]
+
+    assert target["boxes"][0].tolist() == pytest.approx([0, 0, 224, 224])
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "0 -0.0000005 0.5 0.0000002 0.2",
+        "0 1.0000005 0.5 0.0000002 0.2",
+        "0 0.5 -0.0000005 0.2 0.0000002",
+        "0 0.5 1.0000005 0.2 0.0000002",
+    ],
+)
+def test_dataset_rejects_box_collapsed_after_clamping(tmp_path, label):
+    label_path = tmp_path / "labels" / "sample.txt"
+
+    with pytest.raises(ValueError) as error:
+        M3FDDetectionDataset(make_sample(tmp_path, label))[0]
+
+    message = str(error.value)
+    assert str(label_path) in message
+    assert "label row 1" in message
+    assert "original YOLO values=" in message
+    assert "computed normalized xyxy before clamping=" in message
+    assert "clamped normalized xyxy=" in message
+    assert "degenerate box after clamping" in message
+
+
+@pytest.mark.parametrize("label", ["0 0.5 0.5 0 0.2", "0 0.5 0.5 0.2 0"])
+def test_dataset_rejects_zero_sized_box(tmp_path, label):
+    with pytest.raises(ValueError, match="invalid normalized box"):
+        M3FDDetectionDataset(make_sample(tmp_path, label))[0]
+
+
+def test_dataset_rejects_invalid_class_id(tmp_path):
+    with pytest.raises(ValueError, match="invalid class ID"):
+        M3FDDetectionDataset(make_sample(tmp_path, "6 0.5 0.5 0.2 0.2"))[0]
+
+
 def test_dataset_handles_empty_label(tmp_path):
     _, target = M3FDDetectionDataset(make_sample(tmp_path, ""))[0]
     assert target["boxes"].shape == (0, 4)

@@ -40,8 +40,20 @@ def yolo_labels_to_target(rows: list[list[float]], width: int, height: int):
                 f"invalid normalized box coordinates on label row {line_number}: "
                 f"cx={cx:g}, cy={cy:g}, w={box_width:g}, h={box_height:g}"
             )
-        x1, y1 = max(0.0, x1), max(0.0, y1)
-        x2, y2 = min(1.0, x2), min(1.0, y2)
+        normalized_xyxy = (x1, y1, x2, y2)
+        x1 = min(1.0, max(0.0, x1))
+        y1 = min(1.0, max(0.0, y1))
+        x2 = min(1.0, max(0.0, x2))
+        y2 = min(1.0, max(0.0, y2))
+        clamped_xyxy = (x1, y1, x2, y2)
+        if x2 <= x1 or y2 <= y1:
+            raise ValueError(
+                f"degenerate box after clamping on label row {line_number}: "
+                f"original YOLO values=(class_id={class_value:g}, cx={cx:g}, cy={cy:g}, "
+                f"w={box_width:g}, h={box_height:g}), "
+                f"computed normalized xyxy before clamping={normalized_xyxy}, "
+                f"clamped normalized xyxy={clamped_xyxy}"
+            )
         boxes.append([x1 * width, y1 * height, x2 * width, y2 * height])
         labels.append(int(class_value))
     box_tensor = torch.tensor(boxes, dtype=torch.float32).reshape(-1, 4)
