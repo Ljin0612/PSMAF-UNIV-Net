@@ -46,17 +46,21 @@ def yolo_labels_to_target(rows: list[list[float]], width: int, height: int):
         x2 = min(1.0, max(0.0, x2))
         y2 = min(1.0, max(0.0, y2))
         clamped_xyxy = (x1, y1, x2, y2)
-        if x2 <= x1 or y2 <= y1:
+        scaled_xyxy = torch.tensor(
+            [x1 * width, y1 * height, x2 * width, y2 * height], dtype=torch.float32
+        )
+        if scaled_xyxy[2] <= scaled_xyxy[0] or scaled_xyxy[3] <= scaled_xyxy[1]:
             raise ValueError(
-                f"degenerate box after clamping on label row {line_number}: "
+                f"degenerate box after float32 scaling/conversion on label row {line_number}: "
                 f"original YOLO values=(class_id={class_value:g}, cx={cx:g}, cy={cy:g}, "
                 f"w={box_width:g}, h={box_height:g}), "
                 f"computed normalized xyxy before clamping={normalized_xyxy}, "
-                f"clamped normalized xyxy={clamped_xyxy}"
+                f"clamped normalized xyxy={clamped_xyxy}, "
+                f"scaled float32 xyxy={scaled_xyxy.tolist()}"
             )
-        boxes.append([x1 * width, y1 * height, x2 * width, y2 * height])
+        boxes.append(scaled_xyxy)
         labels.append(int(class_value))
-    box_tensor = torch.tensor(boxes, dtype=torch.float32).reshape(-1, 4)
+    box_tensor = torch.stack(boxes) if boxes else torch.empty((0, 4), dtype=torch.float32)
     label_tensor = torch.tensor(labels, dtype=torch.int64)
     return box_tensor, label_tensor
 
