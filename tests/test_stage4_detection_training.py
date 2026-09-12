@@ -10,7 +10,13 @@ np = pytest.importorskip("numpy")
 
 from psmaf_univ.m3fd_detection import M3FDDetectionDataset
 from psmaf_univ.univ_mta_detection_backbone import UNIVMTADetectionBackbone
-from detection.scripts.train_univ_mta_fasterrcnn_m3fd import validate_detection_losses
+from detection.scripts.train_univ_mta_fasterrcnn_m3fd import (
+    UNIV_IR_IMAGE_MEAN,
+    UNIV_IR_IMAGE_STD,
+    build_arg_parser,
+    build_detector,
+    validate_detection_losses,
+)
 
 
 def make_sample(root: Path, label: str, split: str = "smoke_train") -> Path:
@@ -87,3 +93,23 @@ def test_detection_loss_validator_rejects_nonfinite_loss():
     losses["loss_classifier"] = torch.tensor(float("nan"))
     with pytest.raises(RuntimeError, match="finite scalar"):
         validate_detection_losses(losses)
+
+
+def test_training_defaults_use_released_splits_and_univ_ir_normalization():
+    args = build_arg_parser().parse_args([])
+
+    assert args.split == "train"
+    assert args.val_split == "val"
+    assert args.image_mean == list(UNIV_IR_IMAGE_MEAN)
+    assert args.image_std == list(UNIV_IR_IMAGE_STD)
+
+
+def test_fasterrcnn_receives_univ_ir_normalization():
+    pytest.importorskip("torchvision")
+    backbone = torch.nn.Conv2d(3, 256, 1)
+    backbone.out_channels = 256
+
+    detector = build_detector(backbone)
+
+    assert detector.transform.image_mean == list(UNIV_IR_IMAGE_MEAN)
+    assert detector.transform.image_std == list(UNIV_IR_IMAGE_STD)

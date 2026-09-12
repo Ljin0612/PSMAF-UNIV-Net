@@ -1,5 +1,7 @@
 """Tests for compatibility with the checked-in original UNIV source."""
 
+import os
+from pathlib import Path
 import subprocess
 import sys
 import textwrap
@@ -32,6 +34,12 @@ def test_apply_numpy_legacy_aliases_is_idempotent(monkeypatch):
 
 
 def test_apply_numpy_legacy_aliases_with_real_numpy_is_safe():
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    old_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(repo_root), old_pythonpath) if part
+    )
     code = textwrap.dedent(
         """
         from psmaf_univ.compat import apply_numpy_legacy_aliases
@@ -50,6 +58,8 @@ def test_apply_numpy_legacy_aliases_with_real_numpy_is_safe():
         check=True,
         capture_output=True,
         text=True,
+        cwd=repo_root,
+        env=env,
     )
 
     assert result.returncode == 0
