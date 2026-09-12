@@ -37,7 +37,7 @@ def inspect_m3fd_detection(root: str | Path) -> dict[str, Any]:
         raise FileNotFoundError(f"M3FD dataset root does not exist or is not a directory: {root}")
 
     ir_dir = _find_directory(root, ("Ir", "IR", "ir", "images/ir", "images/IR"))
-    visible_dir = _find_directory(root, ("Vis", "VIS", "visible", "images/visible", "images/vis"))
+    visible_dir = _find_directory(root, ("vi", "Vis", "VIS", "visible", "images/visible", "images/vis"))
     label_dir = _find_directory(root, ("labels", "Labels", "annotations"))
     missing_required = []
     if ir_dir is None:
@@ -48,17 +48,28 @@ def inspect_m3fd_detection(root: str | Path) -> dict[str, Any]:
     split_files: dict[str, Path | None] = {}
     for split in SPLITS:
         split_files[split] = next(
-            (path for path in (root / f"{split}.txt", root / "splits" / f"{split}.txt", root / "ImageSets" / f"{split}.txt") if path.is_file()),
+            (
+                path
+                for path in (
+                    root / "meta" / f"{split}.txt",
+                    root / f"{split}.txt",
+                    root / "splits" / f"{split}.txt",
+                    root / "ImageSets" / f"{split}.txt",
+                )
+                if path.is_file()
+            ),
             None,
         )
         if split_files[split] is None:
             missing_required.append(f"{split} split file")
 
     classes, class_file = _read_classes(root)
-    class_names_correct = classes == list(M3FD_CLASS_NAMES)
     if classes is None:
-        missing_required.append("class names file (classes.txt)")
-    elif not class_names_correct:
+        # The released M3FD_Detection tree does not necessarily include a
+        # classes.txt file. Its YOLO labels use this canonical class order.
+        classes = list(M3FD_CLASS_NAMES)
+    class_names_correct = classes == list(M3FD_CLASS_NAMES)
+    if not class_names_correct:
         missing_required.append("canonical class names/order")
 
     split_reports: dict[str, Any] = {}
@@ -71,10 +82,12 @@ def inspect_m3fd_detection(root: str | Path) -> dict[str, Any]:
             entries = [line.strip() for line in split_file.read_text(encoding="utf-8").splitlines() if line.strip()]
             for entry in entries:
                 relative = Path(entry)
-                stem = relative.with_suffix("") if relative.suffix.lower() in image_suffixes else relative
-                candidates = ([root / relative] if relative.suffix.lower() in image_suffixes else []) + [ir_dir / stem.with_suffix(suffix) for suffix in image_suffixes]
+                stem = relative.stem if relative.suffix.lower() in image_suffixes else relative.name
+                candidates = ([root / relative] if relative.suffix.lower() in image_suffixes else []) + [
+                    ir_dir / f"{stem}{suffix}" for suffix in image_suffixes
+                ]
                 image = next((path for path in candidates if path.is_file()), None)
-                label = label_dir / stem.with_suffix(".txt")
+                label = label_dir / f"{stem}.txt"
                 if image is None:
                     missing_images.append(entry)
                 if not label.is_file():

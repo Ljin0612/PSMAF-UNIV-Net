@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Inspect an M3FD detection tree without converting or changing it."""
+"""Inspect an M3FD_Detection tree without converting or changing it.
+
+The standard layout uses ``meta/{train,val,test}.txt``, ``ir/``, ``vi/``, and
+``labels/``. Split lines are matched to image and label files by sample stem.
+"""
 import argparse
 import json
 from pathlib import Path
