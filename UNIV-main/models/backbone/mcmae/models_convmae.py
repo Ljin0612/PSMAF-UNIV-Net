@@ -160,9 +160,10 @@ class MaskedAutoencoderConvViT(nn.Module):
     def forward_encoder(self, x, mask_ratio , return_attention_map = False):
         # embed patches
         ids_keep, mask, ids_restore = self.random_masking(x, mask_ratio)
-        grid = int(L ** .5)
-        if grid * grid != L:
-            raise ValueError(f"UNIV requires a square token grid; got {L} tokens")
+        token_count = mask.shape[1]
+        grid = int(token_count ** .5)
+        if grid * grid != token_count:
+            raise ValueError(f"UNIV requires a square token grid; got {token_count} tokens")
         mask_for_patch1 = mask.reshape(-1, grid, grid).unsqueeze(-1).repeat(1, 1, 1, 16).reshape(-1, grid, grid, 4, 4).permute(0, 1, 3, 2, 4).reshape(x.shape[0], grid * 4, grid * 4).unsqueeze(1)
         mask_for_patch2 = mask.reshape(-1, grid, grid).unsqueeze(-1).repeat(1, 1, 1, 4).reshape(-1, grid, grid, 2, 2).permute(0, 1, 3, 2, 4).reshape(x.shape[0], grid * 2, grid * 2).unsqueeze(1)
         x = self.patch_embed1(x)
