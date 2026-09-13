@@ -21,7 +21,13 @@ from psmaf_univ.univ_diagnostics import build_original_univ, tensor_summary
 from tools.inspect_univ_mta_features import validate_checkpoint_load_report
 
 
-EXPECTED_SHAPES = {"P3": (1, 256, 28, 28), "P4": (1, 256, 14, 14), "P5": (1, 256, 7, 7)}
+def expected_shapes(image_size: int) -> dict[str, tuple[int, ...]]:
+    return {"P3": (1, 256, image_size // 8, image_size // 8),
+            "P4": (1, 256, image_size // 16, image_size // 16),
+            "P5": (1, 256, image_size // 32, image_size // 32)}
+
+
+EXPECTED_SHAPES = expected_shapes(224)
 
 
 def require_file(path: str | Path, description: str) -> Path:
@@ -43,13 +49,13 @@ def validate_detection_features(features: dict[str, Tensor], expected=EXPECTED_S
     return {"type": "shape_validator", "compatible": True, "features": {k: list(v.shape) for k, v in features.items()}}
 
 
-def _load_image(path: Path | None, device: str) -> tuple[Tensor, str]:
+def _load_image(path: Path | None, device: str, image_size: int) -> tuple[Tensor, str]:
     if path is None:
-        return torch.zeros(1, 3, 224, 224, device=device), "dummy"
+        return torch.zeros(1, 3, image_size, image_size, device=device), "dummy"
     require_file(path, "input image")
     from PIL import Image
     import numpy as np
-    image = Image.open(path).convert("RGB").resize((224, 224))
+    image = Image.open(path).convert("RGB").resize((image_size, image_size))
     array = np.asarray(image).copy()
     return torch.from_numpy(array).permute(2, 0, 1).unsqueeze(0).float().div(255).to(device), str(path)
 
@@ -62,12 +68,13 @@ def main() -> None:
     parser.add_argument("--source-root", type=Path, default=ROOT / "UNIV-main")
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--min-load-fraction", type=float, default=0.5)
+    parser.add_argument("--image-size", type=int, choices=(224, 320), default=224)
     args = parser.parse_args()
     require_file(args.checkpoint, "UNIV checkpoint")
-    model = build_original_univ(args.source_root).to(args.device).eval()
+    model = build_original_univ(args.source_root, image_size=args.image_size).to(args.device).eval()
     checkpoint = load_univ_checkpoint(model, args.checkpoint, checkpoint_key=args.checkpoint_key)
     checkpoint_validation = validate_checkpoint_load_report(checkpoint, args.checkpoint_key, args.min_load_fraction)
-    image, image_source = _load_image(args.image, args.device)
+    image, image_source = _load_image(args.image, args.device, args.image_size)
     captured = {}
     modules = dict(model.named_modules())
     missing = [name for name in ("blocks2.1", "norm") if name not in modules]
@@ -82,12 +89,14 @@ def main() -> None:
             handle.remove()
     adapter = MultiScaleTaskAdapter(captured["blocks2.1"].shape[1], captured["norm"].shape[2], 256).to(args.device).eval()
     with torch.inference_mode():
-        features = adapter(captured["blocks2.1"], captured["norm"], grid_size=(14, 14))
+        grid_size = (args.image_size // 16,) * 2
+        features = adapter(captured["blocks2.1"], captured["norm"], grid_size=grid_size)
     report = {"stage": 3, "stream": "IR", "input_source": image_source,
               "checkpoint": asdict(checkpoint), "checkpoint_validation": checkpoint_validation,
               "selected_features": {k: tensor_summary(v) for k, v in captured.items()},
               "adapter_outputs": {k: tensor_summary(v) for k, v in features.items()},
-              "detection_head": validate_detection_features(features)}
+              "image_size": args.image_size, "input_token_grid_size": list(grid_size),
+              "detection_head": validate_detection_features(features, expected_shapes(args.image_size))}
     print(json.dumps(report, indent=2))
 
 

@@ -78,8 +78,8 @@ def inspect_univ_mta_features(
     adapter_out_channels: int = 256,
 ) -> tuple[dict, list[str]]:
     """Run UNIV and its first-version adapter policy with explicit token layout."""
-    if image_size != (224, 224):
-        raise ValueError("the original UNIV Stage 2 smoke test currently supports --image-size 224 224 only")
+    if image_size[0] != image_size[1] or image_size[0] not in (224, 320):
+        raise ValueError("supported image sizes are 224 and 320")
     modules = dict(model.named_modules())
     required = ("blocks2.1", "norm")
     missing = [name for name in required if name not in modules]
@@ -103,7 +103,7 @@ def inspect_univ_mta_features(
             handle.remove()
 
     semantic = captured.get("norm", latent)
-    grid_size = (14, 14)  # Explicit by policy; never inferred from token count.
+    grid_size = (image_size[0] // 16, image_size[1] // 16)
     if semantic.ndim != 3 or semantic.shape[1] != grid_size[0] * grid_size[1]:
         raise ValueError(
             f"norm/output.latent must be BNC with grid_size={grid_size}; got {tuple(semantic.shape)}"
@@ -144,7 +144,9 @@ def main() -> None:
     parser.add_argument("--json-out", type=Path)
     args = parser.parse_args()
 
-    model = build_original_univ(args.source_root)
+    if args.image_size[0] != args.image_size[1] or args.image_size[0] not in (224, 320):
+        parser.error("supported image sizes are 224 and 320")
+    model = build_original_univ(args.source_root, image_size=args.image_size[0])
     caught: list[str] = []
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")

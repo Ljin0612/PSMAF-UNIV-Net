@@ -192,9 +192,14 @@ def build_evaluation_detector(backbone: torch.nn.Module, args: argparse.Namespac
     )
 
 
-def evaluation_metadata(args: argparse.Namespace, model: torch.nn.Module) -> dict:
+def evaluation_metadata(args: argparse.Namespace, model: torch.nn.Module, load_report=None) -> dict:
     """Record the score-filtering and normalization protocol in the result artifact."""
     return {
+        "image_size": getattr(args, "image_size", 224),
+        "input_token_grid_size": [getattr(args, "image_size", 224) // 16] * 2,
+        "pos_embed_resize_info": (
+            getattr(load_report, "pos_embed_resize_info", None) if load_report is not None else None
+        ),
         "requested_score_threshold": args.score_threshold,
         "internal_box_score_thresh": float(model.roi_heads.score_thresh),
         "score_threshold_applied_stage": "evaluation_script",
@@ -233,16 +238,17 @@ def main() -> None:
         validate_normalization_args(args.image_mean, args.image_std)
     except ValueError as error:
         parser.error(str(error))
-    if args.image_size != 224:
-        raise SystemExit("original UNIV currently requires --image-size 224")
+    if args.image_size not in (224, 320):
+        raise SystemExit("supported image sizes are 224 and 320")
     if args.batch_size < 1 or not 0 <= args.score_threshold <= 1:
         raise SystemExit("batch-size must be positive and score-threshold must be in [0, 1]")
     device = torch.device(args.device)
     dataset = M3FDDetectionDataset(args.data_root, args.split, args.image_size)
     loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, collate_fn=detection_collate_fn)
-    backbone, _ = UNIVMTADetectionBackbone.from_checkpoint(
-        args.univ_checkpoint, checkpoint_key=args.checkpoint_key, source_root=args.source_root, freeze_univ=True
+    backbone, load_report = UNIVMTADetectionBackbone.from_checkpoint(
+        args.univ_checkpoint, checkpoint_key=args.checkpoint_key, source_root=args.source_root,
+        freeze_univ=True, image_size=args.image_size
     )
     model = build_evaluation_detector(backbone, args).to(device)
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -257,7 +263,7 @@ def main() -> None:
     results = compute_map(predictions, targets)
     results.update({"stage": "4.3", "dataset": "M3FD-IR", "split": args.split,
                     "checkpoint_key": args.checkpoint_key, "score_threshold": args.score_threshold})
-    results.update(evaluation_metadata(args, model))
+    results.update(evaluation_metadata(args, model, load_report))
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(results, indent=2))

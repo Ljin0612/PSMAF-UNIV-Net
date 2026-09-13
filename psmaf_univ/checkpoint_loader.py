@@ -113,6 +113,10 @@ def resize_pos_embed_if_needed(
     info["source_shape"] = tuple(source.shape)
     info["target_shape"] = tuple(target.shape)
     if source.shape == target.shape:
+        layout = _grid_and_extra(source.shape[1]) if source.ndim == 3 else None
+        if layout is not None:
+            info["source_grid_size"] = layout[0]
+            info["target_grid_size"] = layout[0]
         return info
     if source.ndim != 3 or target.ndim != 3 or source.shape[0] != 1 or target.shape[0] != 1:
         info["skipped_reason"] = "pos_embed must have shape [1, N, C]"
