@@ -47,6 +47,89 @@ def validate_detection_losses(losses: Mapping[str, torch.Tensor]) -> torch.Tenso
     return total
 
 
+def configure_univ_trainability(
+    backbone: UNIVMTADetectionBackbone,
+    freeze_univ: bool,
+    unfreeze_last_n_blocks: int = 0,
+    unfreeze_norm: bool = False,
+) -> list[str]:
+    """Configure late-layer UNIV fine-tuning and return unfrozen module names."""
+    if unfreeze_last_n_blocks < 0:
+        raise ValueError("unfreeze_last_n_blocks must be non-negative")
+    encoder = backbone.encoder
+    if not freeze_univ:
+        encoder.requires_grad_(True)
+        backbone.univ_grad_enabled = True
+        names = [name for name, module in encoder.named_modules() if name and any(
+            parameter.requires_grad for parameter in module.parameters(recurse=False)
+        )]
+        backbone.unfrozen_univ_module_names = tuple(names)
+        return names
+
+    encoder.requires_grad_(False)
+    unfrozen = []
+    blocks = getattr(encoder, "blocks3", None)
+    if unfreeze_last_n_blocks:
+        if blocks is None or not hasattr(blocks, "__len__"):
+            raise ValueError("UNIV encoder has no indexable blocks3 module")
+        if unfreeze_last_n_blocks > len(blocks):
+            raise ValueError(
+                f"cannot unfreeze {unfreeze_last_n_blocks} blocks3 blocks; encoder has {len(blocks)}"
+            )
+        start = len(blocks) - unfreeze_last_n_blocks
+        for index in range(start, len(blocks)):
+            blocks[index].requires_grad_(True)
+            unfrozen.append(f"blocks3.{index}")
+    if unfreeze_norm:
+        norm = getattr(encoder, "norm", None)
+        if norm is None:
+            raise ValueError("UNIV encoder has no final norm module")
+        norm.requires_grad_(True)
+        unfrozen.append("norm")
+    backbone.univ_grad_enabled = bool(unfrozen)
+    backbone.unfrozen_univ_module_names = tuple(unfrozen)
+    return unfrozen
+
+
+def build_optimizer(model: torch.nn.Module, backbone: UNIVMTADetectionBackbone, lr: float, univ_lr: float):
+    """Build SGD groups with a conservative LR for trainable UNIV weights."""
+    univ_ids = {id(parameter) for parameter in backbone.encoder.parameters() if parameter.requires_grad}
+    regular = [parameter for parameter in model.parameters()
+               if parameter.requires_grad and id(parameter) not in univ_ids]
+    univ = [parameter for parameter in backbone.encoder.parameters() if parameter.requires_grad]
+    groups = [{"params": regular, "lr": lr}]
+    if univ:
+        groups.append({"params": univ, "lr": univ_lr, "name": "univ"})
+    return torch.optim.SGD(groups, lr=lr, momentum=0.9, weight_decay=0.0005)
+
+
+def parameter_summary(model: torch.nn.Module, backbone: UNIVMTADetectionBackbone) -> dict:
+    """Return auditable total and trainable parameter counts by component."""
+    count = lambda parameters: sum(parameter.numel() for parameter in parameters if parameter.requires_grad)
+    return {
+        "total_parameter_count": sum(parameter.numel() for parameter in model.parameters()),
+        "trainable_parameter_count": count(model.parameters()),
+        "trainable_univ_parameter_count": count(backbone.encoder.parameters()),
+        "trainable_adapter_parameter_count": count(backbone.adapter.parameters()),
+        "trainable_detector_parameter_count": count(
+            parameter for name, parameter in model.named_parameters()
+            if not name.startswith("backbone.encoder.") and not name.startswith("backbone.adapter.")
+        ),
+    }
+
+
+def training_configuration_summary(args, model, backbone, unfrozen_univ_modules) -> dict:
+    """Build the Stage 5 trainability section of the persisted summary."""
+    return {
+        "freeze_univ": args.freeze_univ,
+        "unfreeze_last_n_blocks": args.unfreeze_last_n_blocks,
+        "unfreeze_norm": args.unfreeze_norm,
+        "univ_lr": args.univ_lr,
+        "unfrozen_univ_module_names": list(unfrozen_univ_modules),
+        **parameter_summary(model, backbone),
+    }
+
+
 def build_detector(
     backbone: torch.nn.Module,
     image_size: int = 224,
@@ -123,6 +206,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/stage4_smoke"))
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--freeze-univ", type=parse_bool, default=True)
+    parser.add_argument("--unfreeze-last-n-blocks", type=int, default=0)
+    parser.add_argument("--unfreeze-norm", type=parse_bool, default=False)
+    parser.add_argument("--univ-lr", type=float, default=1e-5)
     parser.add_argument("--max-train-steps", type=int, default=5)
     return parser
 
@@ -134,6 +220,8 @@ def main() -> None:
         parser.error("original UNIV currently requires --image-size 224")
     if args.epochs < 1 or args.batch_size < 1 or args.max_train_steps < 1:
         parser.error("epochs, batch-size, and max-train-steps must be positive")
+    if args.unfreeze_last_n_blocks < 0 or args.lr <= 0 or args.univ_lr <= 0:
+        parser.error("unfreeze-last-n-blocks must be non-negative and learning rates must be positive")
 
     train_data = M3FDDetectionDataset(args.data_root, args.split, args.image_size)
     val_data = M3FDDetectionDataset(args.data_root, args.val_split, args.image_size)
@@ -153,9 +241,11 @@ def main() -> None:
         min_load_fraction=args.min_load_fraction, source_root=args.source_root,
         freeze_univ=args.freeze_univ,
     )
+    unfrozen_univ_modules = configure_univ_trainability(
+        backbone, args.freeze_univ, args.unfreeze_last_n_blocks, args.unfreeze_norm
+    )
     model = build_detector(backbone, args.image_size, args.image_mean, args.image_std).to(device)
-    parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
-    optimizer = torch.optim.SGD(parameters, lr=args.lr, momentum=0.9, weight_decay=0.0005)
+    optimizer = build_optimizer(model, backbone, args.lr, args.univ_lr)
     steps, last_losses = 0, {}
     model.train()
     for _epoch in range(args.epochs):
@@ -186,6 +276,7 @@ def main() -> None:
         "optimizer_steps": steps, "last_losses": last_losses, "checkpoint": str(checkpoint_path),
         "image_mean": args.image_mean, "image_std": args.image_std,
         "checkpoint_load": asdict(load_report), "evaluation": evaluation,
+        **training_configuration_summary(args, model, backbone, unfrozen_univ_modules),
     }
     summary_path = args.output_dir / "training_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
