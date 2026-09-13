@@ -121,6 +121,13 @@ def parameter_summary(model: torch.nn.Module, backbone: UNIVMTADetectionBackbone
 def training_configuration_summary(args, model, backbone, unfrozen_univ_modules) -> dict:
     """Build the Stage 5 trainability section of the persisted summary."""
     return {
+        "image_size": getattr(args, "image_size", 224),
+        "input_token_grid_size": [getattr(args, "image_size", 224) // 16] * 2,
+        "adapter_output_shapes": {
+            "P3": [256] + [getattr(args, "image_size", 224) // 8] * 2,
+            "P4": [256] + [getattr(args, "image_size", 224) // 16] * 2,
+            "P5": [256] + [getattr(args, "image_size", 224) // 32] * 2,
+        },
         "freeze_univ": args.freeze_univ,
         "unfreeze_last_n_blocks": args.unfreeze_last_n_blocks,
         "unfreeze_norm": args.unfreeze_norm,
@@ -216,8 +223,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
-    if args.image_size != 224:
-        parser.error("original UNIV currently requires --image-size 224")
+    if args.image_size not in (224, 320):
+        parser.error("supported image sizes are 224 and 320")
     if args.epochs < 1 or args.batch_size < 1 or args.max_train_steps < 1:
         parser.error("epochs, batch-size, and max-train-steps must be positive")
     if args.unfreeze_last_n_blocks < 0 or args.lr <= 0 or args.univ_lr <= 0:
@@ -240,6 +247,7 @@ def main() -> None:
         args.checkpoint, checkpoint_key=args.checkpoint_key,
         min_load_fraction=args.min_load_fraction, source_root=args.source_root,
         freeze_univ=args.freeze_univ,
+        image_size=args.image_size,
     )
     unfrozen_univ_modules = configure_univ_trainability(
         backbone, args.freeze_univ, args.unfreeze_last_n_blocks, args.unfreeze_norm
@@ -275,6 +283,8 @@ def main() -> None:
         "sample_image_shape": list(sample_image.shape), "sample_box_count": int(sample_target["boxes"].shape[0]),
         "optimizer_steps": steps, "last_losses": last_losses, "checkpoint": str(checkpoint_path),
         "image_mean": args.image_mean, "image_std": args.image_std,
+        "checkpoint_key": args.checkpoint_key,
+        "pos_embed_resize_info": load_report.pos_embed_resize_info,
         "checkpoint_load": asdict(load_report), "evaluation": evaluation,
         **training_configuration_summary(args, model, backbone, unfrozen_univ_modules),
     }

@@ -33,7 +33,7 @@ DEFAULT_PROBE_MODULES = (
 )
 
 
-def build_original_univ(source_root: str | Path | None = None) -> nn.Module:
+def build_original_univ(source_root: str | Path | None = None, image_size: int = 224) -> nn.Module:
     """Construct the exact ConvMAE factory used by ``pretrain_mcmae.py``.
 
     The upstream directory has a hyphen in its name and is intentionally not
@@ -54,7 +54,11 @@ def build_original_univ(source_root: str | Path | None = None) -> nn.Module:
     # focused compatibility shim immediately before importing that source.
     apply_numpy_legacy_aliases()
     module = importlib.import_module("models.backbone.mcmae.models_convmae")
-    return module.convmae_convvit_base_patch16()
+    if image_size not in (224, 320):
+        raise ValueError("supported image sizes are 224 and 320")
+    return module.convmae_convvit_base_patch16(
+        img_size=[image_size, image_size // 4, image_size // 8]
+    )
 
 
 def model_inventory(model: nn.Module) -> dict[str, Any]:

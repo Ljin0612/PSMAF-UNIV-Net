@@ -52,9 +52,9 @@ class UNIVMTADetectionBackbone(nn.Module):
     def from_checkpoint(
         cls, checkpoint: str | Path, *, checkpoint_key: str = "student",
         min_load_fraction: float = 0.5, source_root: str | Path | None = None,
-        freeze_univ: bool = True,
+        freeze_univ: bool = True, image_size: int = 224,
     ) -> tuple["UNIVMTADetectionBackbone", Any]:
-        encoder = build_original_univ(source_root)
+        encoder = build_original_univ(source_root, image_size=image_size)
         report = load_univ_checkpoint(encoder, checkpoint, checkpoint_key=checkpoint_key)
         validate_checkpoint_load(report, min_load_fraction)
         return cls(encoder, freeze_univ=freeze_univ), report
@@ -69,8 +69,9 @@ class UNIVMTADetectionBackbone(nn.Module):
         return self
 
     def forward(self, image: Tensor) -> OrderedDict[str, Tensor]:
-        if tuple(image.shape[-2:]) != (224, 224):
-            raise ValueError(f"UNIV detection backbone requires 224x224 input; got {tuple(image.shape[-2:])}")
+        height, width = image.shape[-2:]
+        if height != width or height not in (224, 320):
+            raise ValueError("supported image sizes are 224 and 320")
         captured: dict[str, Tensor] = {}
         handles = [
             module.register_forward_hook(lambda _m, _i, output, name=name: captured.__setitem__(name, output))
@@ -86,10 +87,11 @@ class UNIVMTADetectionBackbone(nn.Module):
         semantic = captured.get("norm")
         if semantic is None and isinstance(output, (tuple, list)):
             semantic = output[0]
-        if semantic is None or semantic.ndim != 3 or semantic.shape[1] != 196:
+        grid_size = (height // 16, width // 16)
+        if semantic is None or semantic.ndim != 3 or semantic.shape[1] != grid_size[0] * grid_size[1]:
             shape = None if semantic is None else tuple(semantic.shape)
-            raise ValueError(f"norm/output.latent must be BNC with grid_size=(14, 14); got {shape}")
-        pyramid = self.adapter(captured["blocks2.1"], semantic, grid_size=(14, 14))
+            raise ValueError(f"norm/output.latent must be BNC with grid_size={grid_size}; got {shape}")
+        pyramid = self.adapter(captured["blocks2.1"], semantic, grid_size=grid_size)
         return OrderedDict((name, pyramid[name]) for name in ("P3", "P4", "P5"))
 
 

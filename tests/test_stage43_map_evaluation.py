@@ -119,6 +119,9 @@ def test_evaluation_json_metadata_describes_explicit_postprocess_filtering():
     model = Namespace(roi_heads=Namespace(score_thresh=0.0))
     metadata = evaluation_metadata(args, model)
     assert metadata == {
+        "image_size": 224,
+        "input_token_grid_size": [14, 14],
+        "pos_embed_resize_info": None,
         "requested_score_threshold": 0.0,
         "internal_box_score_thresh": 0.0,
         "score_threshold_applied_stage": "evaluation_script",
