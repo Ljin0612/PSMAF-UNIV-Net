@@ -15,8 +15,73 @@ from detection.scripts.train_univ_mta_fasterrcnn_m3fd import (
     UNIV_IR_IMAGE_STD,
     build_arg_parser,
     build_detector,
+    build_optimizer,
+    configure_univ_trainability,
+    training_configuration_summary,
     validate_detection_losses,
 )
+
+
+class TrainabilityUNIV(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.patch_embed = torch.nn.Linear(2, 2)
+        self.blocks2 = torch.nn.Sequential(torch.nn.Identity(), torch.nn.Conv2d(3, 4, 1))
+        self.blocks3 = torch.nn.ModuleList([torch.nn.Linear(2, 2) for _ in range(11)])
+        self.norm = torch.nn.LayerNorm(8)
+
+
+def make_trainability_backbone():
+    return UNIVMTADetectionBackbone(TrainabilityUNIV(), freeze_univ=True)
+
+
+def test_partial_unfreeze_default_keeps_all_univ_frozen():
+    backbone = make_trainability_backbone()
+    assert configure_univ_trainability(backbone, True) == []
+    assert not any(parameter.requires_grad for parameter in backbone.encoder.parameters())
+
+
+@pytest.mark.parametrize(("count", "expected"), [
+    (1, ["blocks3.10"]),
+    (2, ["blocks3.9", "blocks3.10"]),
+])
+def test_partial_unfreeze_selects_only_last_blocks(count, expected):
+    backbone = make_trainability_backbone()
+    assert configure_univ_trainability(backbone, True, count) == expected
+    trainable = [name for name, parameter in backbone.encoder.named_parameters() if parameter.requires_grad]
+    assert all(any(name.startswith(module + ".") for module in expected) for name in trainable)
+    assert not any(parameter.requires_grad for parameter in backbone.encoder.patch_embed.parameters())
+
+
+def test_partial_unfreeze_optionally_includes_final_norm():
+    backbone = make_trainability_backbone()
+    assert configure_univ_trainability(backbone, True, 0, True) == ["norm"]
+    assert all(parameter.requires_grad for parameter in backbone.encoder.norm.parameters())
+
+
+def test_optimizer_and_summary_report_partial_unfreeze_separately():
+    from argparse import Namespace
+
+    backbone = make_trainability_backbone()
+    names = configure_univ_trainability(backbone, True, 1, True)
+    model = torch.nn.Module()
+    model.backbone = backbone
+    model.head = torch.nn.Linear(2, 2)
+    optimizer = build_optimizer(model, backbone, 0.005, 1e-5)
+
+    assert [group["lr"] for group in optimizer.param_groups] == [0.005, 1e-5]
+    assert optimizer.param_groups[1]["name"] == "univ"
+    summary = training_configuration_summary(
+        Namespace(freeze_univ=True, unfreeze_last_n_blocks=1, unfreeze_norm=True, univ_lr=1e-5),
+        model, backbone, names,
+    )
+    assert set((
+        "freeze_univ", "unfreeze_last_n_blocks", "unfreeze_norm", "univ_lr",
+        "total_parameter_count", "trainable_parameter_count", "trainable_univ_parameter_count",
+        "trainable_adapter_parameter_count", "trainable_detector_parameter_count",
+        "unfrozen_univ_module_names",
+    )).issubset(summary)
+    assert summary["unfrozen_univ_module_names"] == ["blocks3.10", "norm"]
 
 
 def make_sample(root: Path, label: str, split: str = "smoke_train") -> Path:

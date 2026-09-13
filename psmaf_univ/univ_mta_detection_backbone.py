@@ -39,6 +39,8 @@ class UNIVMTADetectionBackbone(nn.Module):
             raise ValueError(f"UNIV model is missing required feature modules: {', '.join(missing)}")
         self.encoder = encoder
         self.freeze_univ = freeze_univ
+        self.univ_grad_enabled = not freeze_univ
+        self.unfrozen_univ_module_names: tuple[str, ...] = ()
         if freeze_univ:
             self.encoder.requires_grad_(False)
         spatial_channels = _module_channels(modules["blocks2.1"], 384)
@@ -61,6 +63,9 @@ class UNIVMTADetectionBackbone(nn.Module):
         super().train(mode)
         if self.freeze_univ:
             self.encoder.eval()
+            modules = dict(self.encoder.named_modules())
+            for name in self.unfrozen_univ_module_names:
+                modules[name].train(mode)
         return self
 
     def forward(self, image: Tensor) -> OrderedDict[str, Tensor]:
@@ -72,7 +77,7 @@ class UNIVMTADetectionBackbone(nn.Module):
             for name, module in zip(("blocks2.1", "norm"), self._feature_modules)
         ]
         try:
-            context = torch.no_grad() if self.freeze_univ else torch.enable_grad()
+            context = torch.enable_grad() if self.univ_grad_enabled else torch.no_grad()
             with context:
                 output = self.encoder(image, mask_ratio=0, return_last_attention=True)
         finally:
