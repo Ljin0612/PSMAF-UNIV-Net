@@ -54,8 +54,8 @@ def build_original_univ(source_root: str | Path | None = None, image_size: int =
     # focused compatibility shim immediately before importing that source.
     apply_numpy_legacy_aliases()
     module = importlib.import_module("models.backbone.mcmae.models_convmae")
-    if image_size not in (224, 320):
-        raise ValueError("supported image sizes are 224 and 320")
+    if image_size not in (224, 320, 640):
+        raise ValueError("supported image sizes are 224, 320, and 640")
     return module.convmae_convvit_base_patch16(
         img_size=[image_size, image_size // 4, image_size // 8]
     )

@@ -70,8 +70,8 @@ class UNIVMTADetectionBackbone(nn.Module):
 
     def forward(self, image: Tensor) -> OrderedDict[str, Tensor]:
         height, width = image.shape[-2:]
-        if height != width or height not in (224, 320):
-            raise ValueError("supported image sizes are 224 and 320")
+        if height != width or height not in (224, 320, 640):
+            raise ValueError("supported image sizes are 224, 320, and 640")
         captured: dict[str, Tensor] = {}
         handles = [
             module.register_forward_hook(lambda _m, _i, output, name=name: captured.__setitem__(name, output))

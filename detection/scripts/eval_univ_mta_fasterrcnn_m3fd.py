@@ -20,6 +20,7 @@ from detection.scripts.train_univ_mta_fasterrcnn_m3fd import (
     UNIV_IR_IMAGE_MEAN,
     UNIV_IR_IMAGE_STD,
     build_detector,
+    parse_image_size,
 )
 from psmaf_univ.m3fd_detection import M3FD_CLASS_NAMES, M3FDDetectionDataset, detection_collate_fn
 from psmaf_univ.univ_mta_detection_backbone import UNIVMTADetectionBackbone
@@ -220,7 +221,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-key", choices=("student", "teacher"), default="student")
     parser.add_argument("--split", choices=("val", "test"), default="val")
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--image-size", type=int, default=224)
+    parser.add_argument("--image-size", type=parse_image_size, default=224)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output-json", type=Path, default=Path("outputs/stage4_eval/metrics.json"))
     parser.add_argument("--score-threshold", type=float, default=0.0)
@@ -238,8 +239,6 @@ def main() -> None:
         validate_normalization_args(args.image_mean, args.image_std)
     except ValueError as error:
         parser.error(str(error))
-    if args.image_size not in (224, 320):
-        raise SystemExit("supported image sizes are 224 and 320")
     if args.batch_size < 1 or not 0 <= args.score_threshold <= 1:
         raise SystemExit("batch-size must be positive and score-threshold must be in [0, 1]")
     device = torch.device(args.device)
