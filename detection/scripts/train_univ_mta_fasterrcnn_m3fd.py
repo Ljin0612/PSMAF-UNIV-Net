@@ -22,6 +22,15 @@ from psmaf_univ.univ_mta_detection_backbone import UNIVMTADetectionBackbone
 EXPECTED_LOSSES = ("loss_classifier", "loss_box_reg", "loss_objectness", "loss_rpn_box_reg")
 UNIV_IR_IMAGE_MEAN = (0.5338, 0.5338, 0.5338)
 UNIV_IR_IMAGE_STD = (0.2519, 0.2519, 0.2519)
+SUPPORTED_IMAGE_SIZES = (224, 320, 640)
+
+
+def parse_image_size(value: str) -> int:
+    """Parse one of the resolutions covered by the Stage 6 protocol."""
+    image_size = int(value)
+    if image_size not in SUPPORTED_IMAGE_SIZES:
+        raise argparse.ArgumentTypeError("supported image sizes are 224, 320, and 640")
+    return image_size
 
 
 def parse_bool(value: str) -> bool:
@@ -205,7 +214,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--val-split", default="val")
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--image-size", type=int, default=224)
+    parser.add_argument("--image-size", type=parse_image_size, default=224)
     parser.add_argument("--image-mean", type=float, nargs=3, default=list(UNIV_IR_IMAGE_MEAN))
     parser.add_argument("--image-std", type=float, nargs=3, default=list(UNIV_IR_IMAGE_STD))
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -223,8 +232,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
-    if args.image_size not in (224, 320):
-        parser.error("supported image sizes are 224 and 320")
     if args.epochs < 1 or args.batch_size < 1 or args.max_train_steps < 1:
         parser.error("epochs, batch-size, and max-train-steps must be positive")
     if args.unfreeze_last_n_blocks < 0 or args.lr <= 0 or args.univ_lr <= 0:
