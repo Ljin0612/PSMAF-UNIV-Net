@@ -293,6 +293,23 @@ def test_legacy_epoch_boundary_checkpoint_can_resume():
     assert progress["resume_warning"]
 
 
+def test_counterless_model_only_checkpoint_is_rejected_for_resume():
+    with pytest.raises(ValueError, match=(
+        "Cannot safely resume checkpoint without progress counters. Please use a checkpoint "
+        "saved by the training script with progress metadata, or start a new training run."
+    )):
+        resolve_resume_progress({"model": {"weight": torch.ones(1)}}, steps_per_epoch=5)
+
+
+def test_legacy_completed_epoch_counter_alone_can_resume():
+    progress = resolve_resume_progress({"completed_epochs": 2}, steps_per_epoch=5)
+
+    assert progress["global_step"] == 10
+    assert progress["optimizer_steps"] == 10
+    assert progress["completed_epochs"] == 2
+    assert progress["resume_mode"] == "legacy_epoch_boundary_resume"
+
+
 def test_legacy_partial_epoch_checkpoint_is_rejected():
     with pytest.raises(ValueError, match="Cannot safely resume legacy partial-epoch checkpoint"):
         resolve_resume_progress(

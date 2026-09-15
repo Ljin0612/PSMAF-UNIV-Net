@@ -28,6 +28,13 @@ LEGACY_PARTIAL_EPOCH_ERROR = (
     "Cannot safely resume legacy partial-epoch checkpoint without batch offset. "
     "Please restart training or resume from an epoch-boundary checkpoint."
 )
+COUNTERLESS_RESUME_ERROR = (
+    "Cannot safely resume checkpoint without progress counters. Please use a checkpoint saved "
+    "by the training script with progress metadata, or start a new training run."
+)
+RESUME_PROGRESS_COUNTERS = (
+    "global_step", "steps", "optimizer_steps", "completed_epochs", "epoch",
+)
 
 
 def parse_image_size(value: str) -> int:
@@ -227,16 +234,39 @@ def resolve_resume_progress(payload: Mapping[str, Any], steps_per_epoch: int) ->
     if steps_per_epoch <= 0:
         raise ValueError("cannot resume training with an empty train loader")
 
-    global_step = int(payload.get("global_step", payload.get("steps", 0)))
-    optimizer_steps = int(payload.get("optimizer_steps", global_step))
-    inferred_epochs = global_step // steps_per_epoch
-    completed_epochs = int(payload.get("completed_epochs", payload.get("epoch", inferred_epochs)))
+    # A model-only payload has no evidence that it was written at an epoch
+    # boundary.  Check for actual persisted progress before deriving any zero
+    # defaults; otherwise an old model checkpoint could silently look like a
+    # valid checkpoint from the beginning of training.
+    if not any(key in payload for key in RESUME_PROGRESS_COUNTERS):
+        raise ValueError(COUNTERLESS_RESUME_ERROR)
+
     offset_key = next(
         (key for key in ("steps_in_current_epoch", "batch_index_in_epoch") if key in payload),
         None,
     )
+    steps_in_current_epoch = int(payload[offset_key]) if offset_key is not None else 0
+    persisted_step = next(
+        (int(payload[key]) for key in ("global_step", "steps", "optimizer_steps") if key in payload),
+        None,
+    )
+    persisted_epochs = next(
+        (int(payload[key]) for key in ("completed_epochs", "epoch") if key in payload),
+        None,
+    )
+    completed_epochs = (
+        persisted_epochs
+        if persisted_epochs is not None
+        else persisted_step // steps_per_epoch
+    )
+    global_step = (
+        persisted_step
+        if persisted_step is not None
+        else completed_epochs * steps_per_epoch + steps_in_current_epoch
+    )
+    optimizer_steps = int(payload.get("optimizer_steps", global_step))
+
     if offset_key is not None:
-        steps_in_current_epoch = int(payload[offset_key])
         if not 0 <= steps_in_current_epoch <= steps_per_epoch:
             raise ValueError(
                 "resume checkpoint batch offset must be between 0 and steps_per_epoch"

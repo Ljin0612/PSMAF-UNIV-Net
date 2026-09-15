@@ -97,7 +97,7 @@ def test_resume_argument_and_zero_evaluation_threshold_are_parsed():
 
 def test_eval_still_loads_legacy_checkpoint_without_resume_offsets():
     state = {"weight": torch.ones(1)}
-    legacy_payload = {"model": state, "epoch": 1, "steps": 5}
+    legacy_payload = {"model": state}
 
     assert _checkpoint_state(legacy_payload, "student") is state
 
