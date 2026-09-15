@@ -18,6 +18,7 @@ from detection.scripts.train_univ_mta_fasterrcnn_m3fd import (
     build_optimizer,
     configure_univ_trainability,
     make_checkpoint_payload,
+    resolve_resume_progress,
     training_configuration_summary,
     validate_detection_losses,
 )
@@ -278,6 +279,37 @@ def test_recovery_checkpoint_contains_new_and_legacy_keys():
     assert payload["checkpoint_key"] == "teacher"
     assert payload["freeze_univ"] is False
     assert payload["config"]["output_dir"] == "out"
+
+
+def test_legacy_epoch_boundary_checkpoint_can_resume():
+    progress = resolve_resume_progress(
+        {"completed_epochs": 2, "optimizer_steps": 10, "global_step": 10},
+        steps_per_epoch=5,
+    )
+
+    assert progress["steps_in_current_epoch"] == 0
+    assert progress["resume_mode"] == "legacy_epoch_boundary_resume"
+    assert progress["legacy_resume_allowed"] is True
+    assert progress["resume_warning"]
+
+
+def test_legacy_partial_epoch_checkpoint_is_rejected():
+    with pytest.raises(ValueError, match="Cannot safely resume legacy partial-epoch checkpoint"):
+        resolve_resume_progress(
+            {"completed_epochs": 2, "optimizer_steps": 12, "global_step": 12},
+            steps_per_epoch=5,
+        )
+
+
+def test_new_partial_epoch_checkpoint_can_resume():
+    progress = resolve_resume_progress(
+        {"completed_epochs": 2, "optimizer_steps": 12, "steps_in_current_epoch": 2},
+        steps_per_epoch=5,
+    )
+
+    assert progress["steps_in_current_epoch"] == 2
+    assert progress["resume_mode"] == "partial_epoch_resume"
+    assert progress["legacy_resume_allowed"] is None
 
 
 def test_fasterrcnn_receives_univ_ir_normalization():

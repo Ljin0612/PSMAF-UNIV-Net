@@ -5,6 +5,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from detection.scripts.eval_univ_mta_fasterrcnn_m3fd import build_arg_parser as eval_parser
+from detection.scripts.eval_univ_mta_fasterrcnn_m3fd import _checkpoint_state
 from detection.scripts.train_univ_mta_fasterrcnn_m3fd import (
     build_arg_parser as train_parser,
     training_configuration_summary,
@@ -92,6 +93,13 @@ def test_resume_argument_and_zero_evaluation_threshold_are_parsed():
     assert train_parser().parse_args(["--resume", "last.pth"]).resume.name == "last.pth"
     args = eval_parser().parse_args(["--checkpoint", "detector.pth", "--score-threshold", "0.0"])
     assert args.score_threshold == 0.0
+
+
+def test_eval_still_loads_legacy_checkpoint_without_resume_offsets():
+    state = {"weight": torch.ones(1)}
+    legacy_payload = {"model": state, "epoch": 1, "steps": 5}
+
+    assert _checkpoint_state(legacy_payload, "student") is state
 
 
 def test_training_summary_records_resolution_fields():
