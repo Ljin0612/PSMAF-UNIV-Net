@@ -15,7 +15,7 @@ from detection.scripts.train_pccl_univ_mta_fasterrcnn_m3fd import (
     build_arg_parser as build_train_parser, build_pccl_optimizer, pccl_mta_tokens,
     validate_pccl_configuration,
 )
-from psmaf_univ.pccl import (attention_pseudo_labels, pccl_objective, sample_patch_indices,
+from psmaf_univ.pccl import (PCCLLoss, attention_pseudo_labels, pccl_objective, sample_patch_indices,
                              sampled_attention_pseudo_labels)
 
 
@@ -49,10 +49,19 @@ def test_attention_labels_use_per_row_cumulative_mass_not_global_range():
                                [0.01, 0.01, 0.01, 0.97],
                                [0.25, 0.25, 0.25, 0.25]]])
     labels = attention_pseudo_labels(attention, gamma=0.6)
-    # Row zero needs its two highest keys to cross 60%; its values are tiny
-    # compared with row one, proving there is no image-global range cutoff.
-    assert labels[0, 0].tolist() == [1, 1, 0, 0]
-    assert labels[0, 1, 0] == 1
+    # Upstream UNIV excludes the key which crosses 60% cumulative mass.  Row
+    # zero's values are tiny beside row one, proving there is no global cutoff.
+    assert labels[0, 0].tolist() == [1, 0, 0, 0]
+    assert labels[0, 1].tolist() == [0, 1, 0, 0]
+
+
+def test_attention_labels_force_diagonal_and_define_zero_mass_rows():
+    attention = torch.tensor([[[0., 1., 0.], [0., 0., 0.], [1., 0., 0.]]])
+    labels = attention_pseudo_labels(attention, gamma=.6)
+    assert torch.all(labels.diagonal(dim1=-2, dim2=-1) == 1)
+    # cumsum <= 0 follows upstream UNIV and selects every tied zero entry.
+    assert labels[0, 1].tolist() == [1, 1, 1]
+    assert torch.all(labels.sum(-1) >= 1)
 
 
 def test_sampled_labels_are_gathered_from_full_attention_semantics():
@@ -72,6 +81,34 @@ def test_pccl_loss_is_finite_and_backpropagates():
     assert all(torch.isfinite(value) for value in (loss, loss_ia, loss_va))
     loss.backward()
     assert infrared.grad is not None and visible.grad is not None
+
+
+def test_pccl_logits_and_asymmetric_labels_share_query_key_direction(monkeypatch):
+    anchors = torch.tensor([[[1., 0.], [0., 1.]]])
+    patches = torch.tensor([[[1., 1.], [.5, -1.]]])
+    labels = torch.tensor([[[1., 0.], [1., 1.]]])
+    captured = {}
+
+    def capture(logits, targets):
+        captured["logits"] = logits
+        captured["targets"] = targets
+        return logits.sum() * 0
+
+    monkeypatch.setattr(torch.nn.functional, "binary_cross_entropy_with_logits", capture)
+    PCCLLoss(temperature=1)(anchors, patches, labels)
+    expected = torch.bmm(torch.nn.functional.normalize(patches, dim=-1),
+                         torch.nn.functional.normalize(anchors, dim=-1).transpose(1, 2))
+    assert torch.equal(captured["targets"], labels)
+    assert torch.allclose(captured["logits"], expected)
+    assert not torch.allclose(captured["logits"], expected.transpose(1, 2))
+
+
+def test_pccl_loss_rejects_labels_outside_query_patch_key_anchor_shape():
+    anchors = torch.randn(2, 4, 5)
+    patches = torch.randn(2, 3, 5)
+    with pytest.raises(ValueError, match=r"shape \(2, 3, 4\)"):
+        PCCLLoss()(anchors, patches, torch.zeros(2, 4, 3))
+    assert torch.isfinite(PCCLLoss()(anchors, patches, torch.zeros(2, 3, 4)))
 
 
 def test_patch_sampling_caps_640_token_grid_without_duplicates():
