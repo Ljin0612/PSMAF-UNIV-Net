@@ -10,9 +10,11 @@ from torch.nn import functional as F
 def attention_pseudo_labels(attention: Tensor, gamma: float = 0.6) -> Tensor:
     """Apply UNIV's row-wise cumulative-attention pseudo-labelling rule.
 
-    ``gamma`` is a fraction of each query row's attention mass.  The smallest
-    descending-score prefix which reaches that mass is positive.  This is
-    deliberately *not* a global value/range threshold.
+    ``gamma`` is a fraction of each query row's attention mass.  Following the
+    upstream UNIV implementation, only the descending-score prefix whose
+    cumulative mass remains at or below that threshold is positive: the entry
+    which crosses the threshold is excluded.  This is deliberately *not* a
+    global value/range threshold.  Self-similarity is made positive afterwards.
     """
     if not 0 <= gamma <= 1:
         raise ValueError("gamma must be in [0, 1]")
@@ -23,11 +25,10 @@ def attention_pseudo_labels(attention: Tensor, gamma: float = 0.6) -> Tensor:
     scores = attention.clamp_min(0)
     sorted_scores, order = scores.sort(dim=-1, descending=True)
     mass = sorted_scores.sum(dim=-1, keepdim=True)
-    # Include the element which crosses the threshold.  Degenerate zero-mass
-    # rows consequently select their first (stable, deterministic) element.
-    selected_sorted = (sorted_scores.cumsum(dim=-1) - sorted_scores) <= gamma * mass
-    ranks = torch.arange(scores.shape[-1], device=scores.device).view(1, 1, -1)
-    selected_sorted = torch.where(mass > 0, selected_sorted, ranks == 0)
+    # UNIV excludes the entry which crosses the cumulative threshold.  For a
+    # zero-mass row the comparison is deterministically true for every entry,
+    # matching that rule without an arbitrary tie-breaking key.
+    selected_sorted = sorted_scores.cumsum(dim=-1) <= gamma * mass
     labels = torch.zeros_like(scores).scatter_(-1, order, selected_sorted.to(scores.dtype))
     diagonal = torch.arange(labels.shape[-1], device=labels.device)
     labels[:, diagonal, diagonal] = 1
@@ -53,7 +54,12 @@ def sample_patch_indices(token_count: int, num_patches: int, device=None, genera
 
 
 class PCCLLoss(nn.Module):
-    """Sigmoid-similarity BCE for frozen anchors and aligned modality patches."""
+    """Sigmoid-similarity BCE for frozen anchors and modality query patches.
+
+    The matrix convention is ``labels[b, query_patch, key_anchor]`` matching
+    ``logits[b, query_patch, key_anchor]``.  In particular, asymmetric labels
+    are not silently transposed to accommodate anchor-first similarity logits.
+    """
 
     def __init__(self, temperature: float = 0.04) -> None:
         super().__init__()
@@ -62,14 +68,15 @@ class PCCLLoss(nn.Module):
         self.temperature = temperature
 
     def forward(self, anchors: Tensor, patches: Tensor, pseudo_labels: Tensor) -> Tensor:
-        if anchors.shape != patches.shape or anchors.ndim != 3:
-            raise ValueError("anchors and patches must have matching BxNxC shape")
-        expected = (*anchors.shape[:2], anchors.shape[1])
+        if (anchors.ndim != 3 or patches.ndim != 3 or
+                anchors.shape[0] != patches.shape[0] or anchors.shape[2] != patches.shape[2]):
+            raise ValueError("anchors and patches must have matching batch and channel dimensions")
+        expected = (patches.shape[0], patches.shape[1], anchors.shape[1])
         if tuple(pseudo_labels.shape) != expected:
             raise ValueError(f"pseudo_labels must have shape {expected}")
         anchors = F.normalize(anchors.detach(), dim=-1)
         patches = F.normalize(patches, dim=-1)
-        logits = torch.bmm(anchors, patches.transpose(1, 2)) / self.temperature
+        logits = torch.bmm(patches, anchors.transpose(1, 2)) / self.temperature
         return F.binary_cross_entropy_with_logits(logits, pseudo_labels.to(logits.dtype))
 
 
