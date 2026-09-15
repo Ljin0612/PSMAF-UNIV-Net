@@ -8,11 +8,11 @@ from torch.nn import functional as F
 
 
 def attention_pseudo_labels(attention: Tensor, gamma: float = 0.6) -> Tensor:
-    """Turn frozen RGB self-attention into a binary patch-pair matrix.
+    """Apply UNIV's row-wise cumulative-attention pseudo-labelling rule.
 
-    UNIV attention is ``B,H,N,N``. Heads are averaged and the directed map is
-    symmetrised. Values are normalized per image before thresholding so gamma
-    has resolution-independent meaning. Self pairs are always positives.
+    ``gamma`` is a fraction of each query row's attention mass.  The smallest
+    descending-score prefix which reaches that mass is positive.  This is
+    deliberately *not* a global value/range threshold.
     """
     if not 0 <= gamma <= 1:
         raise ValueError("gamma must be in [0, 1]")
@@ -20,14 +20,28 @@ def attention_pseudo_labels(attention: Tensor, gamma: float = 0.6) -> Tensor:
         attention = attention.mean(dim=1)
     if attention.ndim != 3 or attention.shape[-1] != attention.shape[-2]:
         raise ValueError("attention must have shape BxNxN or BxHxNxN")
-    scores = (attention + attention.transpose(-1, -2)) * 0.5
-    minimum = scores.amin(dim=(-2, -1), keepdim=True)
-    maximum = scores.amax(dim=(-2, -1), keepdim=True)
-    scores = (scores - minimum) / (maximum - minimum).clamp_min(torch.finfo(scores.dtype).eps)
-    labels = (scores >= gamma).to(dtype=scores.dtype)
+    scores = attention.clamp_min(0)
+    sorted_scores, order = scores.sort(dim=-1, descending=True)
+    mass = sorted_scores.sum(dim=-1, keepdim=True)
+    # Include the element which crosses the threshold.  Degenerate zero-mass
+    # rows consequently select their first (stable, deterministic) element.
+    selected_sorted = (sorted_scores.cumsum(dim=-1) - sorted_scores) <= gamma * mass
+    ranks = torch.arange(scores.shape[-1], device=scores.device).view(1, 1, -1)
+    selected_sorted = torch.where(mass > 0, selected_sorted, ranks == 0)
+    labels = torch.zeros_like(scores).scatter_(-1, order, selected_sorted.to(scores.dtype))
     diagonal = torch.arange(labels.shape[-1], device=labels.device)
     labels[:, diagonal, diagonal] = 1
     return labels.detach()
+
+
+def sampled_attention_pseudo_labels(attention: Tensor, indices: Tensor, gamma: float = 0.6) -> Tensor:
+    """Generate labels from complete rows, then gather sampled query/key pairs.
+
+    Computing the cumulative mass before sampling preserves the full-attention
+    PCCL meaning: omitted keys still contribute to the row threshold.
+    """
+    labels = attention_pseudo_labels(attention, gamma)
+    return labels.index_select(-2, indices).index_select(-1, indices)
 
 
 def sample_patch_indices(token_count: int, num_patches: int, device=None, generator=None) -> Tensor:
