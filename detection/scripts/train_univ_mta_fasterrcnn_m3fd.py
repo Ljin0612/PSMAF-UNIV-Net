@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import sys
 import time
-from typing import Mapping
+from typing import Any, Mapping
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -204,6 +204,58 @@ def evaluate_smoke(model, loader, device: torch.device) -> dict:
     }
 
 
+def _recovery_config(args) -> dict[str, Any]:
+    """Return a JSON-friendly copy of the command-line training configuration."""
+    return {
+        key: str(value) if isinstance(value, Path) else value
+        for key, value in vars(args).items()
+    }
+
+
+def make_checkpoint_payload(
+    model, optimizer, args, *, epoch: int, completed_epochs: int,
+    global_step: int, optimizer_steps: int, steps_in_current_epoch: int,
+) -> dict[str, Any]:
+    """Build a recovery checkpoint (while retaining the old key aliases)."""
+    model_state = model.state_dict()
+    optimizer_state = optimizer.state_dict()
+    return {
+        "model_state_dict": model_state,
+        "optimizer_state_dict": optimizer_state,
+        # These aliases allow older Stage 4/6 consumers to keep working.
+        "model": model_state,
+        "optimizer": optimizer_state,
+        "epoch": epoch,
+        "completed_epochs": completed_epochs,
+        "global_step": global_step,
+        "steps": global_step,
+        "optimizer_steps": optimizer_steps,
+        "steps_in_current_epoch": steps_in_current_epoch,
+        "batch_index_in_epoch": steps_in_current_epoch,
+        "image_size": args.image_size,
+        "checkpoint_key": args.checkpoint_key,
+        "freeze_univ": args.freeze_univ,
+        "args": _recovery_config(args),
+        "config": _recovery_config(args),
+    }
+
+
+def save_training_checkpoint(
+    path: Path, model, optimizer, args, *, epoch: int, completed_epochs: int,
+    global_step: int, optimizer_steps: int, steps_in_current_epoch: int,
+) -> dict[str, Any]:
+    """Atomically save the latest recoverable training state."""
+    payload = make_checkpoint_payload(
+        model, optimizer, args, epoch=epoch, completed_epochs=completed_epochs,
+        global_step=global_step, optimizer_steps=optimizer_steps,
+        steps_in_current_epoch=steps_in_current_epoch,
+    )
+    temporary = path.with_name(f".{path.name}.tmp")
+    torch.save(payload, temporary)
+    temporary.replace(path)
+    return payload
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, default=Path("/home/jinlei/database/M3FD_Detection"))
@@ -227,6 +279,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--unfreeze-norm", type=parse_bool, default=False)
     parser.add_argument("--univ-lr", type=float, default=1e-5)
     parser.add_argument("--max-train-steps", type=int, default=5)
+    parser.add_argument("--save-interval-steps", type=int, default=1000)
     parser.add_argument("--resume", type=Path, help="Resume a detector training checkpoint")
     return parser
 
@@ -234,15 +287,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
-    if args.epochs < 1 or args.batch_size < 1 or args.max_train_steps < 1:
-        parser.error("epochs, batch-size, and max-train-steps must be positive")
+    if (args.epochs < 1 or args.batch_size < 1 or args.max_train_steps < 1
+            or args.save_interval_steps < 1):
+        parser.error("epochs, batch-size, max-train-steps, and save-interval-steps must be positive")
     if args.unfreeze_last_n_blocks < 0 or args.lr <= 0 or args.univ_lr <= 0:
         parser.error("unfreeze-last-n-blocks must be non-negative and learning rates must be positive")
 
     train_data = M3FDDetectionDataset(args.data_root, args.split, args.image_size)
     val_data = M3FDDetectionDataset(args.data_root, args.val_split, args.image_size)
     train_loader = torch.utils.data.DataLoader(
-        train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers,
+        # Sequential sampling makes batch skipping reproducible across a restart.
+        train_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
         collate_fn=detection_collate_fn,
     )
     val_loader = torch.utils.data.DataLoader(
@@ -263,27 +318,35 @@ def main() -> None:
     )
     model = build_detector(backbone, args.image_size, args.image_mean, args.image_std).to(device)
     optimizer = build_optimizer(model, backbone, args.lr, args.univ_lr)
-    global_step = optimizer_steps = completed_epochs = 0
+    global_step = optimizer_steps = completed_epochs = steps_in_current_epoch = 0
     resume_info = None
     if args.resume is not None:
         payload = torch.load(args.resume, map_location="cpu", weights_only=False)
-        if not isinstance(payload, Mapping) or "model" not in payload:
+        model_state = payload.get("model_state_dict", payload.get("model")) if isinstance(payload, Mapping) else None
+        if model_state is None:
             raise ValueError("resume checkpoint does not contain a model state")
-        model.load_state_dict(payload["model"], strict=True)
-        if "optimizer" in payload:
-            optimizer.load_state_dict(payload["optimizer"])
+        model.load_state_dict(model_state, strict=True)
+        optimizer_state = payload.get("optimizer_state_dict", payload.get("optimizer"))
+        if optimizer_state is not None:
+            optimizer.load_state_dict(optimizer_state)
         global_step = int(payload.get("global_step", payload.get("steps", 0)))
         optimizer_steps = int(payload.get("optimizer_steps", global_step))
         inferred_epochs = global_step // max(len(train_loader), 1)
         completed_epochs = int(payload.get("completed_epochs", payload.get("epoch", inferred_epochs)))
+        steps_in_current_epoch = int(payload.get(
+            "steps_in_current_epoch", payload.get("batch_index_in_epoch", 0)
+        ))
         resume_info = {
             "path": str(args.resume), "global_step": global_step,
             "optimizer_steps": optimizer_steps, "completed_epochs": completed_epochs,
-            "optimizer_state_loaded": "optimizer" in payload,
+            "steps_in_current_epoch": steps_in_current_epoch,
+            "optimizer_state_loaded": optimizer_state is not None,
         }
     last_losses = {}
     history_path = args.output_dir / "metrics_history.jsonl"
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    last_checkpoint_path = args.output_dir / "last.pth"
+    compatibility_checkpoint_path = args.output_dir / "stage4_smoke_checkpoint.pth"
     history_mode = "a" if args.resume is not None and history_path.exists() else "w"
     model.train()
     with history_path.open(history_mode, encoding="utf-8") as history_file:
@@ -291,7 +354,9 @@ def main() -> None:
             interval_start = time.monotonic()
             epoch_finished = True
             for batch_index, (images, targets) in enumerate(train_loader):
-                if global_step >= args.max_train_steps:
+                if epoch == completed_epochs and batch_index < steps_in_current_epoch:
+                    continue
+                if optimizer_steps >= args.max_train_steps:
                     epoch_finished = False
                     break
                 images = [image.to(device) for image in images]
@@ -303,12 +368,26 @@ def main() -> None:
                 optimizer.step()
                 global_step += 1
                 optimizer_steps += 1
+                steps_in_current_epoch = batch_index + 1
                 last_losses = {name: float(value.detach().cpu()) for name, value in losses.items()}
-                if global_step >= args.max_train_steps:
+                if optimizer_steps % args.save_interval_steps == 0:
+                    save_training_checkpoint(
+                        last_checkpoint_path, model, optimizer, args, epoch=epoch,
+                        completed_epochs=completed_epochs, global_step=global_step,
+                        optimizer_steps=optimizer_steps,
+                        steps_in_current_epoch=steps_in_current_epoch,
+                    )
+                if optimizer_steps >= args.max_train_steps:
                     epoch_finished = batch_index + 1 == len(train_loader)
                     break
             if epoch_finished:
                 completed_epochs = epoch + 1
+                steps_in_current_epoch = 0
+                save_training_checkpoint(
+                    last_checkpoint_path, model, optimizer, args, epoch=completed_epochs,
+                    completed_epochs=completed_epochs, global_step=global_step,
+                    optimizer_steps=optimizer_steps, steps_in_current_epoch=0,
+                )
             if last_losses:
                 record = {
                     "epoch": epoch + 1, "global_step": global_step,
@@ -320,22 +399,21 @@ def main() -> None:
                 }
                 history_file.write(json.dumps(record) + "\n")
                 history_file.flush()
-            if global_step >= args.max_train_steps:
+            if optimizer_steps >= args.max_train_steps:
                 break
+
+    # Persist both names before evaluation: evaluation can be substantially more
+    # memory hungry and must never prevent a trained state from being resumed.
+    checkpoint_payload = save_training_checkpoint(
+        last_checkpoint_path, model, optimizer, args, epoch=completed_epochs,
+        completed_epochs=completed_epochs, global_step=global_step,
+        optimizer_steps=optimizer_steps, steps_in_current_epoch=steps_in_current_epoch,
+    )
+    torch.save(checkpoint_payload, compatibility_checkpoint_path)
 
     evaluation = evaluate_smoke(model, val_loader, device)
     if not evaluation["finite_scores"]:
         raise RuntimeError("validation prediction scores contain non-finite values")
-    last_checkpoint_path = args.output_dir / "last.pth"
-    compatibility_checkpoint_path = args.output_dir / "stage4_smoke_checkpoint.pth"
-    checkpoint_payload = {
-        "model": model.state_dict(), "optimizer": optimizer.state_dict(),
-        "epoch": completed_epochs, "completed_epochs": completed_epochs,
-        "steps": global_step, "global_step": global_step,
-        "optimizer_steps": optimizer_steps,
-    }
-    torch.save(checkpoint_payload, last_checkpoint_path)
-    torch.save(checkpoint_payload, compatibility_checkpoint_path)
     summary = {
         "stage": "6.5", "dataset": "M3FD", "stream": "IR",
         "train_samples": len(train_data), "val_samples": len(val_data),
@@ -348,6 +426,11 @@ def main() -> None:
         "checkpoint_paths": {"last": str(last_checkpoint_path),
                              "stage4_smoke_checkpoint": str(compatibility_checkpoint_path)},
         "metrics_history": str(history_path), "resume_from": resume_info,
+        "resume_warnings": ([
+            "Partial-epoch resume skips batches in deterministic sequential order; exact recovery is not "
+            "guaranteed if the dataset, batch size, worker behavior, or preprocessing changed. Sampler RNG "
+            "state is not stored."
+        ] if resume_info is not None and resume_info["steps_in_current_epoch"] else []),
         "image_mean": args.image_mean, "image_std": args.image_std,
         "checkpoint_key": args.checkpoint_key,
         "pos_embed_resize_info": load_report.pos_embed_resize_info,
