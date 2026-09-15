@@ -24,6 +24,10 @@ EXPECTED_LOSSES = ("loss_classifier", "loss_box_reg", "loss_objectness", "loss_r
 UNIV_IR_IMAGE_MEAN = (0.5338, 0.5338, 0.5338)
 UNIV_IR_IMAGE_STD = (0.2519, 0.2519, 0.2519)
 SUPPORTED_IMAGE_SIZES = (224, 320, 640, 1024)
+LEGACY_PARTIAL_EPOCH_ERROR = (
+    "Cannot safely resume legacy partial-epoch checkpoint without batch offset. "
+    "Please restart training or resume from an epoch-boundary checkpoint."
+)
 
 
 def parse_image_size(value: str) -> int:
@@ -212,6 +216,65 @@ def _recovery_config(args) -> dict[str, Any]:
     }
 
 
+def resolve_resume_progress(payload: Mapping[str, Any], steps_per_epoch: int) -> dict[str, Any]:
+    """Validate checkpoint progress and return an unambiguous training position.
+
+    Older detector checkpoints did not record a batch offset.  Such a checkpoint
+    is safe for training resume only when one of its step counters proves that it
+    was saved after a completed epoch.  Evaluation does not call this helper and
+    remains able to load legacy model-only payloads.
+    """
+    if steps_per_epoch <= 0:
+        raise ValueError("cannot resume training with an empty train loader")
+
+    global_step = int(payload.get("global_step", payload.get("steps", 0)))
+    optimizer_steps = int(payload.get("optimizer_steps", global_step))
+    inferred_epochs = global_step // steps_per_epoch
+    completed_epochs = int(payload.get("completed_epochs", payload.get("epoch", inferred_epochs)))
+    offset_key = next(
+        (key for key in ("steps_in_current_epoch", "batch_index_in_epoch") if key in payload),
+        None,
+    )
+    if offset_key is not None:
+        steps_in_current_epoch = int(payload[offset_key])
+        if not 0 <= steps_in_current_epoch <= steps_per_epoch:
+            raise ValueError(
+                "resume checkpoint batch offset must be between 0 and steps_per_epoch"
+            )
+        return {
+            "global_step": global_step,
+            "optimizer_steps": optimizer_steps,
+            "completed_epochs": completed_epochs,
+            "steps_in_current_epoch": steps_in_current_epoch,
+            "resume_mode": (
+                "partial_epoch_resume" if steps_in_current_epoch else "epoch_boundary_resume"
+            ),
+            "legacy_resume_allowed": None,
+            "resume_warning": (
+                "Partial-epoch resume skips batches in deterministic sequential order; exact "
+                "recovery is not guaranteed if the dataset, batch size, worker behavior, or "
+                "preprocessing changed. Sampler RNG state is not stored."
+                if steps_in_current_epoch else None
+            ),
+        }
+
+    boundary_steps = completed_epochs * steps_per_epoch
+    if optimizer_steps != boundary_steps and global_step != boundary_steps:
+        raise ValueError(LEGACY_PARTIAL_EPOCH_ERROR)
+    return {
+        "global_step": global_step,
+        "optimizer_steps": optimizer_steps,
+        "completed_epochs": completed_epochs,
+        "steps_in_current_epoch": 0,
+        "resume_mode": "legacy_epoch_boundary_resume",
+        "legacy_resume_allowed": True,
+        "resume_warning": (
+            "Legacy checkpoint had no batch offset; resume was allowed because a step counter "
+            "matches the completed epoch boundary."
+        ),
+    }
+
+
 def make_checkpoint_payload(
     model, optimizer, args, *, epoch: int, completed_epochs: int,
     global_step: int, optimizer_steps: int, steps_in_current_epoch: int,
@@ -329,18 +392,20 @@ def main() -> None:
         optimizer_state = payload.get("optimizer_state_dict", payload.get("optimizer"))
         if optimizer_state is not None:
             optimizer.load_state_dict(optimizer_state)
-        global_step = int(payload.get("global_step", payload.get("steps", 0)))
-        optimizer_steps = int(payload.get("optimizer_steps", global_step))
-        inferred_epochs = global_step // max(len(train_loader), 1)
-        completed_epochs = int(payload.get("completed_epochs", payload.get("epoch", inferred_epochs)))
-        steps_in_current_epoch = int(payload.get(
-            "steps_in_current_epoch", payload.get("batch_index_in_epoch", 0)
-        ))
+        steps_per_epoch = len(train_loader)
+        progress = resolve_resume_progress(payload, steps_per_epoch)
+        global_step = progress["global_step"]
+        optimizer_steps = progress["optimizer_steps"]
+        completed_epochs = progress["completed_epochs"]
+        steps_in_current_epoch = progress["steps_in_current_epoch"]
         resume_info = {
             "path": str(args.resume), "global_step": global_step,
             "optimizer_steps": optimizer_steps, "completed_epochs": completed_epochs,
             "steps_in_current_epoch": steps_in_current_epoch,
             "optimizer_state_loaded": optimizer_state is not None,
+            "resume_mode": progress["resume_mode"],
+            "legacy_resume_allowed": progress["legacy_resume_allowed"],
+            "resume_warning": progress["resume_warning"],
         }
     last_losses = {}
     history_path = args.output_dir / "metrics_history.jsonl"
@@ -425,12 +490,14 @@ def main() -> None:
         "checkpoint": str(compatibility_checkpoint_path),
         "checkpoint_paths": {"last": str(last_checkpoint_path),
                              "stage4_smoke_checkpoint": str(compatibility_checkpoint_path)},
-        "metrics_history": str(history_path), "resume_from": resume_info,
-        "resume_warnings": ([
-            "Partial-epoch resume skips batches in deterministic sequential order; exact recovery is not "
-            "guaranteed if the dataset, batch size, worker behavior, or preprocessing changed. Sampler RNG "
-            "state is not stored."
-        ] if resume_info is not None and resume_info["steps_in_current_epoch"] else []),
+        "metrics_history": str(history_path),
+        "resume_from": str(args.resume) if args.resume is not None else None,
+        "resume_mode": resume_info["resume_mode"] if resume_info is not None else "fresh_start",
+        "legacy_resume_allowed": (
+            resume_info["legacy_resume_allowed"] if resume_info is not None else None
+        ),
+        "resume_warning": resume_info["resume_warning"] if resume_info is not None else None,
+        "resume_details": resume_info,
         "image_mean": args.image_mean, "image_std": args.image_std,
         "checkpoint_key": args.checkpoint_key,
         "pos_embed_resize_info": load_report.pos_embed_resize_info,
