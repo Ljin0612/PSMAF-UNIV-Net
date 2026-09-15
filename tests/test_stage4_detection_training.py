@@ -17,6 +17,7 @@ from detection.scripts.train_univ_mta_fasterrcnn_m3fd import (
     build_detector,
     build_optimizer,
     configure_univ_trainability,
+    make_checkpoint_payload,
     training_configuration_summary,
     validate_detection_losses,
 )
@@ -249,6 +250,34 @@ def test_training_defaults_use_released_splits_and_univ_ir_normalization():
     assert args.val_split == "val"
     assert args.image_mean == list(UNIV_IR_IMAGE_MEAN)
     assert args.image_std == list(UNIV_IR_IMAGE_STD)
+    assert args.save_interval_steps == 1000
+
+
+def test_save_interval_steps_parser():
+    assert build_arg_parser().parse_args(["--save-interval-steps", "17"]).save_interval_steps == 17
+
+
+def test_recovery_checkpoint_contains_new_and_legacy_keys():
+    from argparse import Namespace
+
+    model = torch.nn.Linear(1, 1)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    args = Namespace(image_size=320, checkpoint_key="teacher", freeze_univ=False,
+                     output_dir=Path("out"))
+    payload = make_checkpoint_payload(
+        model, optimizer, args, epoch=2, completed_epochs=1, global_step=12,
+        optimizer_steps=11, steps_in_current_epoch=4,
+    )
+
+    assert payload["model_state_dict"] is payload["model"]
+    assert payload["optimizer_state_dict"] is payload["optimizer"]
+    assert payload["batch_index_in_epoch"] == payload["steps_in_current_epoch"] == 4
+    assert payload["global_step"] == 12
+    assert payload["optimizer_steps"] == 11
+    assert payload["image_size"] == 320
+    assert payload["checkpoint_key"] == "teacher"
+    assert payload["freeze_univ"] is False
+    assert payload["config"]["output_dir"] == "out"
 
 
 def test_fasterrcnn_receives_univ_ir_normalization():
