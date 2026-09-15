@@ -68,7 +68,13 @@ def main() -> None:
     parser.add_argument("--source-root", type=Path, default=ROOT / "UNIV-main")
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--min-load-fraction", type=float, default=0.5)
-    parser.add_argument("--image-size", type=int, choices=(224, 320, 640), default=224)
+    def image_size(value: str) -> int:
+        parsed = int(value)
+        if parsed not in (224, 320, 640, 1024):
+            raise argparse.ArgumentTypeError("supported image sizes are 224, 320, 640, and 1024")
+        return parsed
+
+    parser.add_argument("--image-size", type=image_size, default=224)
     args = parser.parse_args()
     require_file(args.checkpoint, "UNIV checkpoint")
     model = build_original_univ(args.source_root, image_size=args.image_size).to(args.device).eval()

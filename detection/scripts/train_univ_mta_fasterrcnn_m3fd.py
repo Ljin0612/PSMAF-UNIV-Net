@@ -8,6 +8,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import sys
+import time
 from typing import Mapping
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,14 +23,14 @@ from psmaf_univ.univ_mta_detection_backbone import UNIVMTADetectionBackbone
 EXPECTED_LOSSES = ("loss_classifier", "loss_box_reg", "loss_objectness", "loss_rpn_box_reg")
 UNIV_IR_IMAGE_MEAN = (0.5338, 0.5338, 0.5338)
 UNIV_IR_IMAGE_STD = (0.2519, 0.2519, 0.2519)
-SUPPORTED_IMAGE_SIZES = (224, 320, 640)
+SUPPORTED_IMAGE_SIZES = (224, 320, 640, 1024)
 
 
 def parse_image_size(value: str) -> int:
     """Parse one of the resolutions covered by the Stage 6 protocol."""
     image_size = int(value)
     if image_size not in SUPPORTED_IMAGE_SIZES:
-        raise argparse.ArgumentTypeError("supported image sizes are 224, 320, and 640")
+        raise argparse.ArgumentTypeError("supported image sizes are 224, 320, 640, and 1024")
     return image_size
 
 
@@ -226,6 +227,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--unfreeze-norm", type=parse_bool, default=False)
     parser.add_argument("--univ-lr", type=float, default=1e-5)
     parser.add_argument("--max-train-steps", type=int, default=5)
+    parser.add_argument("--resume", type=Path, help="Resume a detector training checkpoint")
     return parser
 
 
@@ -261,34 +263,91 @@ def main() -> None:
     )
     model = build_detector(backbone, args.image_size, args.image_mean, args.image_std).to(device)
     optimizer = build_optimizer(model, backbone, args.lr, args.univ_lr)
-    steps, last_losses = 0, {}
+    global_step = optimizer_steps = completed_epochs = 0
+    resume_info = None
+    if args.resume is not None:
+        payload = torch.load(args.resume, map_location="cpu", weights_only=False)
+        if not isinstance(payload, Mapping) or "model" not in payload:
+            raise ValueError("resume checkpoint does not contain a model state")
+        model.load_state_dict(payload["model"], strict=True)
+        if "optimizer" in payload:
+            optimizer.load_state_dict(payload["optimizer"])
+        global_step = int(payload.get("global_step", payload.get("steps", 0)))
+        optimizer_steps = int(payload.get("optimizer_steps", global_step))
+        inferred_epochs = global_step // max(len(train_loader), 1)
+        completed_epochs = int(payload.get("completed_epochs", payload.get("epoch", inferred_epochs)))
+        resume_info = {
+            "path": str(args.resume), "global_step": global_step,
+            "optimizer_steps": optimizer_steps, "completed_epochs": completed_epochs,
+            "optimizer_state_loaded": "optimizer" in payload,
+        }
+    last_losses = {}
+    history_path = args.output_dir / "metrics_history.jsonl"
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    history_mode = "a" if args.resume is not None and history_path.exists() else "w"
     model.train()
-    for _epoch in range(args.epochs):
-        for images, targets in train_loader:
-            images = [image.to(device) for image in images]
-            targets = _device_targets(targets, device)
-            optimizer.zero_grad(set_to_none=True)
-            losses = model(images, targets)
-            total = validate_detection_losses(losses)
-            total.backward()
-            optimizer.step()
-            steps += 1
-            last_losses = {name: float(value.detach().cpu()) for name, value in losses.items()}
-            if steps >= args.max_train_steps:
+    with history_path.open(history_mode, encoding="utf-8") as history_file:
+        for epoch in range(completed_epochs, args.epochs):
+            interval_start = time.monotonic()
+            epoch_finished = True
+            for batch_index, (images, targets) in enumerate(train_loader):
+                if global_step >= args.max_train_steps:
+                    epoch_finished = False
+                    break
+                images = [image.to(device) for image in images]
+                targets = _device_targets(targets, device)
+                optimizer.zero_grad(set_to_none=True)
+                losses = model(images, targets)
+                total = validate_detection_losses(losses)
+                total.backward()
+                optimizer.step()
+                global_step += 1
+                optimizer_steps += 1
+                last_losses = {name: float(value.detach().cpu()) for name, value in losses.items()}
+                if global_step >= args.max_train_steps:
+                    epoch_finished = batch_index + 1 == len(train_loader)
+                    break
+            if epoch_finished:
+                completed_epochs = epoch + 1
+            if last_losses:
+                record = {
+                    "epoch": epoch + 1, "global_step": global_step,
+                    "optimizer_steps": optimizer_steps,
+                    **{name: last_losses.get(name, 0.0) for name in EXPECTED_LOSSES},
+                    "total_loss": sum(last_losses.values()),
+                    "lr": float(optimizer.param_groups[0]["lr"]),
+                    "elapsed_time_sec": time.monotonic() - interval_start,
+                }
+                history_file.write(json.dumps(record) + "\n")
+                history_file.flush()
+            if global_step >= args.max_train_steps:
                 break
-        if steps >= args.max_train_steps:
-            break
 
     evaluation = evaluate_smoke(model, val_loader, device)
     if not evaluation["finite_scores"]:
         raise RuntimeError("validation prediction scores contain non-finite values")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = args.output_dir / "stage4_smoke_checkpoint.pth"
-    torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "steps": steps}, checkpoint_path)
+    last_checkpoint_path = args.output_dir / "last.pth"
+    compatibility_checkpoint_path = args.output_dir / "stage4_smoke_checkpoint.pth"
+    checkpoint_payload = {
+        "model": model.state_dict(), "optimizer": optimizer.state_dict(),
+        "epoch": completed_epochs, "completed_epochs": completed_epochs,
+        "steps": global_step, "global_step": global_step,
+        "optimizer_steps": optimizer_steps,
+    }
+    torch.save(checkpoint_payload, last_checkpoint_path)
+    torch.save(checkpoint_payload, compatibility_checkpoint_path)
     summary = {
-        "stage": 4, "stream": "IR", "train_samples": len(train_data), "val_samples": len(val_data),
+        "stage": "6.5", "dataset": "M3FD", "stream": "IR",
+        "train_samples": len(train_data), "val_samples": len(val_data),
         "sample_image_shape": list(sample_image.shape), "sample_box_count": int(sample_target["boxes"].shape[0]),
-        "optimizer_steps": steps, "last_losses": last_losses, "checkpoint": str(checkpoint_path),
+        "epochs": args.epochs, "max_train_steps": args.max_train_steps,
+        "global_step": global_step, "optimizer_steps": optimizer_steps,
+        "completed_epochs": completed_epochs, "last_losses": last_losses,
+        "output_dir": str(args.output_dir),
+        "checkpoint": str(compatibility_checkpoint_path),
+        "checkpoint_paths": {"last": str(last_checkpoint_path),
+                             "stage4_smoke_checkpoint": str(compatibility_checkpoint_path)},
+        "metrics_history": str(history_path), "resume_from": resume_info,
         "image_mean": args.image_mean, "image_std": args.image_std,
         "checkpoint_key": args.checkpoint_key,
         "pos_embed_resize_info": load_report.pos_embed_resize_info,
