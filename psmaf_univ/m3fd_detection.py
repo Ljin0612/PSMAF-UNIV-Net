@@ -125,6 +125,35 @@ class M3FDDetectionDataset:
         return image_tensor, target
 
 
+class PairedM3FDDetectionDataset(M3FDDetectionDataset):
+    """Load geometrically aligned IR/RGB images and their shared detection target.
+
+    No random spatial transform is applied here: both streams are resized with
+    the exact same operation, which preserves M3FD's patch correspondence.
+    """
+
+    def __getitem__(self, index: int):
+        import numpy as np
+        import torch
+        from PIL import Image
+
+        ir_image, target = super().__getitem__(index)
+        entry = Path(self.stems[index])
+        stem = entry.stem if entry.suffix else entry.name
+        visible_path = self.root / "vi" / f"{stem}.png"
+        if not visible_path.is_file():
+            raise FileNotFoundError(f"M3FD visible image does not exist: {visible_path}")
+        with Image.open(visible_path) as source:
+            visible = source.convert("RGB").resize((self.image_size, self.image_size))
+            visible_image = torch.from_numpy(np.asarray(visible).copy()).permute(2, 0, 1).float().div(255)
+        return ir_image, visible_image, target
+
+
+def paired_detection_collate_fn(batch):
+    """Keep both paired image streams and variable-length targets as lists."""
+    return tuple(zip(*batch))
+
+
 def detection_collate_fn(batch):
     """Keep variable-length detection targets as a list."""
     return tuple(zip(*batch))

@@ -260,7 +260,7 @@ def main() -> None:
             predictions.extend(prediction_to_evaluation(item, args.score_threshold) for item in outputs)
             targets.extend(target_to_evaluation(item) for item in batch_targets)
     results = compute_map(predictions, targets)
-    results.update({"stage": "4.3", "dataset": "M3FD-IR", "split": args.split,
+    results.update({"stage": getattr(args, "stage_label", "4.3"), "dataset": "M3FD-IR", "split": args.split,
                     "checkpoint_key": args.checkpoint_key, "score_threshold": args.score_threshold})
     results.update(evaluation_metadata(args, model, load_report))
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
