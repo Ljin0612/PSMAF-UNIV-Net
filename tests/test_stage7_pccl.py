@@ -8,6 +8,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from detection.scripts import eval_pccl_univ_mta_fasterrcnn_m3fd as stage7_eval
 from detection.scripts.eval_pccl_univ_mta_fasterrcnn_m3fd import build_arg_parser
 from detection.scripts.eval_univ_mta_fasterrcnn_m3fd import prediction_to_evaluation
 from psmaf_univ.m3fd_detection import PairedM3FDDetectionDataset
@@ -251,3 +252,80 @@ def test_lora_optimizer_lr_and_explicit_state_round_trip():
     load_lora_state_dict(clone, saved)
     assert saved
     assert all(torch.equal(value, clone.state_dict()[name]) for name, value in saved.items())
+
+
+class _TinyDetector(torch.nn.Module):
+    def __init__(self, backbone):
+        super().__init__()
+        self.backbone = backbone
+
+
+def _stage7_eval_checkpoint(tmp_path, monkeypatch, *, lora_enabled=True,
+                            include_lora_state=True):
+    backbone = _TinyBackbone()
+    backbone.encoder = _SharedEncoder()
+    if lora_enabled:
+        attach_lora(backbone.encoder, rank=3, alpha=9, dropout=.25)
+        for name, parameter in backbone.encoder.named_parameters():
+            if ".lora_" in name:
+                parameter.data.fill_(.37 if ".lora_A." in name else -.19)
+    detector = _TinyDetector(backbone)
+    payload = {
+        "config": {"lora_enabled": lora_enabled, "lora_rank": 3,
+                   "lora_alpha": 9, "lora_dropout": .25,
+                   "checkpoint_key": "student", "image_size": 320},
+        "student": {"model": detector.state_dict()},
+    }
+    if lora_enabled and include_lora_state:
+        payload["lora_state_dict"] = lora_state_dict(backbone.encoder)
+    path = tmp_path / "stage7.pth"
+    torch.save(payload, path)
+
+    fresh = _TinyBackbone()
+    fresh.encoder = _SharedEncoder()
+    seen = {}
+
+    def from_checkpoint(path, **kwargs):
+        seen.update(path=path, **kwargs)
+        return fresh, None
+
+    monkeypatch.setattr(stage7_eval.UNIVMTADetectionBackbone, "from_checkpoint",
+                        from_checkpoint)
+    monkeypatch.setattr(stage7_eval.base, "build_evaluation_detector",
+                        lambda loaded_backbone, _args: _TinyDetector(loaded_backbone))
+    args = Namespace(checkpoint=path, univ_checkpoint=tmp_path / "original-univ.pth",
+                     checkpoint_key="teacher", image_size=640, source_root=tmp_path,
+                     image_mean=[0., 0., 0.], image_std=[1., 1., 1.])
+    return args, payload, fresh, seen
+
+
+def test_stage7_evaluator_restores_lora_from_trained_checkpoint(tmp_path, monkeypatch):
+    args, payload, backbone, seen = _stage7_eval_checkpoint(tmp_path, monkeypatch)
+    stage7_eval.build_stage7_evaluation_detector(args)
+    restored = lora_state_dict(backbone.encoder)
+    assert restored.keys() == payload["lora_state_dict"].keys()
+    assert all(torch.equal(restored[name], payload["lora_state_dict"][name]) for name in restored)
+    assert seen["path"] == args.univ_checkpoint
+    assert seen["checkpoint_key"] == "student"
+    assert seen["image_size"] == 320
+    first = backbone.encoder.blocks3[0].attn.qkv
+    assert isinstance(first, LoRALinear)
+    assert first.lora_A.out_features == 3
+    assert first.scaling == 3
+    assert first.dropout.p == .25
+
+
+def test_stage7_evaluator_requires_explicit_lora_state(tmp_path, monkeypatch):
+    args, _payload, _backbone, _seen = _stage7_eval_checkpoint(
+        tmp_path, monkeypatch, include_lora_state=False)
+    with pytest.raises(RuntimeError, match="lora_enabled=true.*missing lora_state_dict"):
+        stage7_eval.build_stage7_evaluation_detector(args)
+
+
+def test_stage7_evaluator_non_lora_checkpoint_compatibility(tmp_path, monkeypatch):
+    args, _payload, backbone, _seen = _stage7_eval_checkpoint(
+        tmp_path, monkeypatch, lora_enabled=False)
+    model, _report, _payload, config = stage7_eval.build_stage7_evaluation_detector(args)
+    assert model.backbone is backbone
+    assert config["lora_enabled"] is False
+    assert not any(isinstance(module, LoRALinear) for module in backbone.encoder.modules())
