@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 import torch
 
 from detection.scripts import eval_univ_mta_fasterrcnn_m3fd as base
-from psmaf_univ.lora_adapter import attach_lora, load_lora_state_dict, lora_state_dict
+from psmaf_univ.lora_adapter import attach_lora, lora_state_dict
 from psmaf_univ.m3fd_detection import M3FDDetectionDataset, detection_collate_fn
 from psmaf_univ.univ_mta_detection_backbone import UNIVMTADetectionBackbone
 
@@ -92,9 +92,22 @@ def build_stage7_evaluation_detector(args):
     model = base.build_evaluation_detector(backbone, args)
     model.load_state_dict(base._checkpoint_state(payload, args.checkpoint_key), strict=True)
     if config["lora_enabled"]:
-        # Restore the separately audited adapter copy as well as the copy in the
-        # complete detector state.  This also validates every explicit key.
-        load_lora_state_dict(backbone.encoder, payload["lora_state_dict"])
+        # The complete detector state is authoritative.  The separately saved
+        # adapter state is only a duplicate audit copy and must never overwrite
+        # tensors that were just restored from the detector checkpoint.
+        actual = lora_state_dict(backbone.encoder)
+        explicit = payload["lora_state_dict"]
+        for name in actual:
+            saved = explicit[name]
+            restored = actual[name]
+            if (not isinstance(saved, torch.Tensor)
+                    or restored.shape != saved.shape
+                    or restored.dtype != saved.dtype
+                    or not torch.equal(restored, saved)):
+                raise RuntimeError(
+                    "Stage 7 checkpoint contains conflicting duplicate LoRA weights "
+                    f"between model_state_dict and lora_state_dict: {name}"
+                )
     return model, load_report, payload, config
 
 

@@ -315,6 +315,34 @@ def test_stage7_evaluator_restores_lora_from_trained_checkpoint(tmp_path, monkey
     assert first.dropout.p == .25
 
 
+def test_stage7_evaluator_rejects_conflicting_explicit_lora_state(tmp_path, monkeypatch):
+    args, payload, backbone, _seen = _stage7_eval_checkpoint(tmp_path, monkeypatch)
+    name = next(iter(payload["lora_state_dict"]))
+    authoritative = payload["student"]["model"][f"backbone.encoder.{name}"].clone()
+    payload["lora_state_dict"][name].add_(1)
+    torch.save(payload, args.checkpoint)
+
+    with pytest.raises(RuntimeError, match=(
+            "conflicting duplicate LoRA weights between model_state_dict and "
+            f"lora_state_dict: {name}")):
+        stage7_eval.build_stage7_evaluation_detector(args)
+
+    # A failed audit does not replace the detector tensor with the explicit copy.
+    assert torch.equal(lora_state_dict(backbone.encoder)[name], authoritative)
+
+
+def test_stage7_evaluator_rejects_conflicting_detector_lora_state(tmp_path, monkeypatch):
+    args, payload, _backbone, _seen = _stage7_eval_checkpoint(tmp_path, monkeypatch)
+    name = next(iter(payload["lora_state_dict"]))
+    payload["student"]["model"][f"backbone.encoder.{name}"].add_(1)
+    torch.save(payload, args.checkpoint)
+
+    with pytest.raises(RuntimeError, match=(
+            "conflicting duplicate LoRA weights between model_state_dict and "
+            f"lora_state_dict: {name}")):
+        stage7_eval.build_stage7_evaluation_detector(args)
+
+
 def test_stage7_evaluator_requires_explicit_lora_state(tmp_path, monkeypatch):
     args, _payload, _backbone, _seen = _stage7_eval_checkpoint(
         tmp_path, monkeypatch, include_lora_state=False)
