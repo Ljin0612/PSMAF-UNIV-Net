@@ -13,8 +13,10 @@ from detection.scripts.eval_univ_mta_fasterrcnn_m3fd import prediction_to_evalua
 from psmaf_univ.m3fd_detection import PairedM3FDDetectionDataset
 from detection.scripts.train_pccl_univ_mta_fasterrcnn_m3fd import (
     build_arg_parser as build_train_parser, build_pccl_optimizer, pccl_mta_tokens,
-    validate_pccl_configuration,
+    shared_encoder_tokens, validate_pccl_configuration,
 )
+from psmaf_univ.lora_adapter import (LoRALinear, attach_lora, is_lora_parameter,
+                                     load_lora_state_dict, lora_state_dict)
 from psmaf_univ.pccl import (PCCLLoss, attention_pseudo_labels, pccl_objective, sample_patch_indices,
                              sampled_attention_pseudo_labels)
 
@@ -168,3 +170,84 @@ def test_p4_pccl_backpropagates_to_mta_when_encoder_frozen():
     tokens.square().sum().backward()
     assert backbone.adapter.weight.grad is not None
     assert torch.count_nonzero(backbone.adapter.weight.grad)
+
+
+class _TokenBlock(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.attn = torch.nn.Module()
+        self.attn.qkv = torch.nn.Linear(2, 6)
+        self.attn.proj = torch.nn.Linear(2, 2)
+        self.mlp = torch.nn.Module()
+        self.mlp.fc1 = torch.nn.Linear(2, 4)
+        self.mlp.fc2 = torch.nn.Linear(4, 2)
+
+    def forward(self, value):
+        return self.mlp.fc2(torch.relu(self.mlp.fc1(value)))
+
+
+class _SharedEncoder(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.convolution = torch.nn.Conv2d(3, 2, 1)
+        self.blocks3 = torch.nn.ModuleList([_TokenBlock()])
+        self.norm = torch.nn.LayerNorm(2)
+        self.calls = []
+
+    def forward(self, image, **_kwargs):
+        self.calls.append(image)
+        value = self.convolution(image).mean((2, 3)).unsqueeze(1)
+        value = self.blocks3[0](value)
+        value = self.norm(value)
+        return value, None
+
+
+def test_lora_targets_only_transformer_linears_and_freezes_base():
+    encoder = _SharedEncoder()
+    names = attach_lora(encoder, rank=2, alpha=4, dropout=0)
+    assert set(names) == {"blocks3.0.attn.qkv", "blocks3.0.attn.proj",
+                          "blocks3.0.mlp.fc1", "blocks3.0.mlp.fc2"}
+    assert isinstance(encoder.blocks3[0].mlp.fc1, LoRALinear)
+    assert not encoder.convolution.weight.requires_grad
+    assert all(parameter.requires_grad == is_lora_parameter(name)
+               for name, parameter in encoder.named_parameters())
+
+
+def test_visible_and_infrared_pccl_both_gradient_shared_lora():
+    encoder = _SharedEncoder()
+    attach_lora(encoder, rank=2, alpha=4, dropout=0)
+    # Give B a nonzero value so a standalone test has immediate input gradients.
+    for name, parameter in encoder.named_parameters():
+        if ".lora_B." in name:
+            torch.nn.init.constant_(parameter, .1)
+    backbone = type("Backbone", (), {"encoder": encoder})()
+    ir = encoder(torch.randn(1, 3, 4, 4))[0]
+    visible = shared_encoder_tokens(backbone, torch.rand(1, 3, 4, 4))
+    anchor = torch.randn_like(ir)
+    labels = torch.ones(1, 1, 1)
+    loss, loss_ia, loss_va = pccl_objective(anchor, ir, visible, labels)
+    assert loss_ia.requires_grad and loss_va.requires_grad
+    loss.backward()
+    assert len(encoder.calls) == 2
+    assert any(parameter.grad is not None for name, parameter in encoder.named_parameters()
+               if is_lora_parameter(name))
+    assert all(parameter.grad is None for name, parameter in encoder.named_parameters()
+               if not is_lora_parameter(name))
+
+
+def test_lora_optimizer_lr_and_explicit_state_round_trip():
+    backbone = _TinyBackbone(freeze=True)
+    # Install a transformer-shaped module on the tiny encoder container.
+    backbone.encoder = _SharedEncoder()
+    attach_lora(backbone.encoder, rank=2, alpha=4, dropout=0)
+    projector = torch.nn.Linear(2, 2)
+    optimizer = build_pccl_optimizer(backbone, backbone, (projector,), lr=.1,
+                                     univ_lr=.002, lora_lr=1e-4)
+    groups = {group["name"]: group for group in optimizer.param_groups}
+    assert groups["lora"]["lr"] == 1e-4
+    saved = lora_state_dict(backbone.encoder)
+    clone = _SharedEncoder()
+    attach_lora(clone, rank=2, alpha=4, dropout=0)
+    load_lora_state_dict(clone, saved)
+    assert saved
+    assert all(torch.equal(value, clone.state_dict()[name]) for name, value in saved.items())
